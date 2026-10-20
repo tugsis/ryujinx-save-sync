@@ -20,3 +20,10 @@ backups/
 Thumbs.db
 .idea/
 .vscode/
+
+# Generated frontend / release artifacts (the original settings-preview/dist is source)
+frontend/dist/
+artifacts/
+**/TestResults/
+__pycache__/
+*.pyc
