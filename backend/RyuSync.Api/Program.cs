@@ -33,7 +33,7 @@ builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 1024 * 1024);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.Configure<JsonOptions>(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
-var db = new StateDatabase(root); var snapshots = new Snapshots(db); var engine = new SyncEngine(db, snapshots); var coordinator = new Coordinator(db, snapshots, engine);
+using var db = new StateDatabase(root); var snapshots = new Snapshots(db); var engine = new SyncEngine(db, snapshots); var coordinator = new Coordinator(db, snapshots, engine);
 var instanceSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); var clientSessions = new ConcurrentDictionary<string, byte>(); var tickets = new ConcurrentDictionary<string, DateTimeOffset>();
 string Ticket() { var t = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); tickets[t] = DateTimeOffset.UtcNow.AddMinutes(5); return t; }
 var url = $"http://127.0.0.1:{port}";

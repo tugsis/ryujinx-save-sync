@@ -2,10 +2,11 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 namespace RyuSync;
 
-public sealed class StateDatabase
+public sealed class StateDatabase : IDisposable
 {
     public string Root { get; }
     private readonly string connectionString;
+    private bool disposed;
     public StateDatabase(string root)
     {
         Root = Path.GetFullPath(root);
@@ -17,7 +18,31 @@ public sealed class StateDatabase
         cmd.CommandText = "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS records(kind TEXT NOT NULL,id TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(kind,id));";
         cmd.ExecuteNonQuery();
     }
-    private SqliteConnection Open() { var c = new SqliteConnection(connectionString); c.Open(); return c; }
+    private SqliteConnection Open()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            connection.Open();
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        // Disposing an individual connection returns its native handle to the pool.
+        // Release only this database's pool before its owner deletes/moves the files.
+        using var connection = new SqliteConnection(connectionString);
+        SqliteConnection.ClearPool(connection);
+    }
     public void Put<T>(string kind, string id, T value)
     {
         using var c = Open(); using var cmd = c.CreateCommand();

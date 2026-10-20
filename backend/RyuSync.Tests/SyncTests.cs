@@ -10,19 +10,27 @@ public sealed class Fixture : IDisposable
 {
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "ryusync-tests-" + Guid.NewGuid().ToString("N"));
     public LocalStore Store { get; }
+    private readonly List<StateDatabase> databases = [];
     public Fixture() { Directory.CreateDirectory(Root); Store = new(Path.Combine(Root, "remote")); }
     public (StateDatabase Db, Binding Binding, SyncEngine Engine, Snapshots Snapshots, RevisionRepository Remote) Device(string name, string? text = "initial")
     {
         var local = Path.Combine(Root, name); var saveRoot = Path.Combine(local, "bis", "user", "save", "0000000000000003"); Directory.CreateDirectory(Path.Combine(saveRoot, "0"));
         if (text is not null) File.WriteAllText(Path.Combine(saveRoot, "0", "save.dat"), text);
         File.WriteAllText(Path.Combine(saveRoot, "ExtraData0"), "emulator metadata must remain local");
-        var db = new StateDatabase(Path.Combine(Root, name + "-state")); var settings = new AppSettings { DeviceName = name, WebDavUrl = "https://example.invalid/", Workspace = "tests" }; db.Settings = settings;
+        var db = new StateDatabase(Path.Combine(Root, name + "-state"));
+        databases.Add(db);
+        var settings = new AppSettings { DeviceName = name, WebDavUrl = "https://example.invalid/", Workspace = "tests" }; db.Settings = settings;
         var b = new Binding(name, "0100F2C0115B6000", "Test Game", name, "0000000000000003", saveRoot); var snaps = new Snapshots(db); var engine = new SyncEngine(db, snaps) { IdleCheck = _ => { } };
         return (db, b, engine, snaps, new RevisionRepository(Store, settings, Path.Combine(db.Root, "staging")));
     }
     public static void Write(Binding b, string text) => File.WriteAllText(Path.Combine(b.SaveRoot, "0", "save.dat"), text);
     public static string Read(Binding b) => File.ReadAllText(Path.Combine(b.SaveRoot, "0", "save.dat"));
-    public void Dispose() { Directory.Delete(Root, true); }
+    public void Dispose()
+    {
+        foreach (var database in databases) database.Dispose();
+        Store.Dispose();
+        Directory.Delete(Root, true);
+    }
 }
 public sealed class LocalStore(string root) : IObjectStore
 {
