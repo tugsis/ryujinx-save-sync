@@ -7,6 +7,21 @@ namespace RyuSync.Tests;
 
 public class WebDavTests
 {
+    [Theory]
+    [InlineData(HttpRequestError.SecureConnectionError, "인증서 만료일")]
+    [InlineData(HttpRequestError.NameResolutionError, "DNS")]
+    [InlineData(HttpRequestError.ConnectionError, "포트")]
+    [InlineData(HttpRequestError.Unknown, "서버에 연결하지 못했습니다")]
+    public void ConnectionErrorsExplainTheCauseWithoutExposingRequestDetails(HttpRequestError error, string expected)
+    {
+        const string sensitiveDetail = "https://private-user:private-password@example.com/private-path";
+        var exception = new HttpRequestException(error, sensitiveDetail, new Exception(sensitiveDetail));
+        var message = Coordinator.Friendly(exception);
+        Assert.Contains(expected, message);
+        Assert.DoesNotContain("private-", message);
+        Assert.DoesNotContain("example.com", message);
+    }
+
     [Fact]
     public async Task HttpAdapterCreatesListsUploadsDownloadsAndDeletes()
     {

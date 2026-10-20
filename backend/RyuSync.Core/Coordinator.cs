@@ -192,6 +192,9 @@ public sealed class Coordinator
     {
         UserError => e.Message,
         TaskCanceledException => "요청 시간이 초과되었습니다. 로컬 세이브와 미전송 스냅샷은 보존됩니다.",
+        HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError } => "HTTPS 인증서 또는 TLS 연결을 확인하지 못했습니다. 서버·리버스 프록시의 인증서 만료일, 도메인, 신뢰 체인과 기기의 날짜·시간을 확인하세요.",
+        HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError } => "WebDAV 서버의 도메인을 찾지 못했습니다. 서버 주소와 DNS 설정을 확인하세요.",
+        HttpRequestException { HttpRequestError: HttpRequestError.ConnectionError } => "WebDAV 서버에 접속하지 못했습니다. 서버 주소·포트, 서버 실행 상태와 네트워크를 확인하세요.",
         HttpRequestException => "서버에 연결하지 못했습니다. 주소·네트워크·인증서를 확인하세요.",
         UnauthorizedAccessException => "파일 접근 권한이 없습니다.",
         IOException => "파일 작업에 실패했습니다. 저장 공간과 파일 잠금, 백업을 확인하세요.",

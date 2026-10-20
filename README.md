@@ -32,6 +32,25 @@ Windows 11과 SteamOS에서 Ryujinx User Save를 WebDAV로 동기화하는 로�
 
 `--self-contained true`로 만든 배포 폴더에는 .NET 런타임이 포함됩니다. **대상 기기에 .NET SDK나 Node.js를 설치하지 않고도 실행할 수 있습니다.** 다만 Linux의 기본 시스템 라이브러리까지 포함하는 것은 아닙니다. [Microsoft 배포 문서](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-publish)
 
+### Linux 개발 PC에 .NET SDK 설치하기
+
+Linux에서 소스를 빌드할 때도 **.NET 10 SDK**가 필요합니다. `dotnet: command not found`가 나오면 SDK 설치와 PATH를 확인하세요. 셸이 제안하는 `dotnet-host` 패키지만으로는 이 프로젝트를 빌드할 수 없습니다.
+
+패키지 관리자 대신 [Microsoft 공식 설치 스크립트](https://learn.microsoft.com/en-us/dotnet/core/install/linux-scripted-manual)를 사용해 사용자 홈에 설치하는 예시입니다.
+
+```bash
+curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+bash /tmp/dotnet-install.sh --channel 10.0 --install-dir "$HOME/.dotnet" --no-path
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+dotnet --list-sdks
+dotnet --version
+```
+
+`10.0.xxx` SDK가 표시되는지 확인하세요. 설치 위치는 영구적인 `~/.dotnet`이며 `/tmp`에는 설치 스크립트만 둡니다. 새 Bash 터미널에서도 사용하려면 위의 `DOTNET_ROOT`와 `PATH` 설정을 `~/.bashrc`에 추가하세요. 로그인 셸에는 `~/.profile`에도 같은 설정을 둘 수 있습니다. 이미 추가했다면 반복해서 넣을 필요는 없습니다.
+
+현재 열려 있는 터미널에는 설정 변경이 자동 반영되지 않으므로 `source ~/.bashrc`를 실행하거나 새 터미널을 여세요. 프론트엔드 빌드에는 Node.js와 npm도 필요합니다.
+
 ## Windows 11에서 빌드하고 테스트하기
 
 ### 1. 소스 준비
@@ -338,6 +357,8 @@ Steam에서 플레이
 
 | 증상 | 확인할 내용 |
 |---|---|
+| Linux에서 `dotnet: command not found` | .NET 10 SDK를 설치하고 `~/.dotnet`을 PATH에 추가. 현재 터미널은 `source ~/.bashrc`로 갱신 |
+| `A compatible .NET SDK was not found` | `dotnet --list-sdks`에서 10.0 SDK 확인. 빌드에는 Runtime·Host 대신 SDK가 필요 |
 | PowerShell이 `npm.ps1` 실행을 차단함 | `npm` 대신 `npm.cmd`로 같은 명령 실행. 예: `npm.cmd --prefix frontend ci` |
 | GitHub에서 실행 파일을 찾을 수 없음 | 현재 소스 저장소이므로 OS별 publish를 먼저 실행 |
 | 설정 링크에서 연결 필요·401 표시 | 같은 상태 폴더로 `open` 실행. 오래된 일회성 링크를 재사용하지 않음 |
@@ -347,6 +368,8 @@ Steam에서 플레이
 | 세이브 인덱스 없음 | 데이터 루트 선택 확인. 게임을 한 번 실행했는지 확인 |
 | 탐색 때 실행 중 오류 | Ryujinx를 완전히 종료하고 재탐색 |
 | WebDAV 인증·권한·404·리디렉션 오류 | 최종 WebDAV 엔드포인트, 계정 권한, 폴더 경로 확인. 연결 테스트는 테스트 파일 삭제 권한도 필요 |
+| HTTPS 인증서 또는 TLS 연결 오류 | 기기의 날짜·시간과 서버 인증서의 만료일·도메인·중간 인증서 확인. 만료된 인증서는 NAS 또는 리버스 프록시에서 갱신하고 WebDAV 주소에 실제 적용됐는지 확인한 뒤 연결 테스트 재시도 |
+| WebDAV 도메인을 찾지 못함·접속 실패 | DNS 설정, 서버 주소·포트, 방화벽과 서버 실행 상태 확인 |
 | SteamOS 실행 권한·라이브러리 오류 | Linux 배포 폴더 전체와 실행 권한 확인. 필요한 시스템 라이브러리 누락 여부 확인 |
 | 온라인 디자인 초안에서는 실제 동기화가 안 됨 | `settings-preview` 및 기존 온라인 초안은 시뮬레이션. 실제 기능은 로컬 백엔드가 제공하는 화면에서 사용 |
 | 다운로드 후 게임이 인식하지 못함 | 동일 게임·프로필·업데이트 버전, 실제 Ryujinx 데이터 루트와 실행 인수 확인. 백업을 보존하고 호환성 조사 |
