@@ -1,0 +1,22 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules/
+**/bin/
+**/obj/
+
+# Local data, save files and backups
+data/
+backups/
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
