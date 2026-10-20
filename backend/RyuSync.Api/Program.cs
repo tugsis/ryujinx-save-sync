@@ -73,7 +73,10 @@ app.MapPost("/api/session", (SessionRequest request, HttpContext ctx) =>
     ctx.Response.Cookies.Append("ryusync_session", session, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Strict, IsEssential = true, Path = "/" }); return Results.Ok(new { ok = true });
 });
 app.MapPost("/api/ui-ticket", (HttpContext ctx) => ctx.Request.Headers["X-RyuSync-Agent"] == instanceSecret ? Results.Ok(new { url = url + "/#token=" + Ticket() }) : Results.Unauthorized());
-app.MapGet("/api/status", () => new { version = "0.1.0-dev", device = db.Settings.DeviceName, os = OperatingSystem.IsWindows() ? "Windows" : "Linux / SteamOS", credentialUnlocked = coordinator.HasCredential, launch = coordinator.ActiveLaunch, pendingUploads = db.List<PendingUpload>("pending").Count, recovery = db.List<ApplyJournal>("journal").Count });
+var appVersion = System.Reflection.Assembly.GetExecutingAssembly()
+    .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+    .Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion.Split('+')[0];
+app.MapGet("/api/status", () => new { version = appVersion, device = db.Settings.DeviceName, os = OperatingSystem.IsWindows() ? "Windows" : "Linux / SteamOS", credentialUnlocked = coordinator.HasCredential, launch = coordinator.ActiveLaunch, pendingUploads = db.List<PendingUpload>("pending").Count, recovery = db.List<ApplyJournal>("journal").Count });
 app.MapGet("/api/settings", () => db.Settings);
 app.MapPut("/api/settings", async (AppSettings settings) => await coordinator.SaveSettings(settings));
 app.MapPost("/api/storage/unlock", (CredentialRequest request) => { coordinator.Unlock(request.Password); return Results.Ok(new { unlocked = coordinator.HasCredential }); });

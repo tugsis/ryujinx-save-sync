@@ -28,7 +28,14 @@ Windows 11과 SteamOS에서 Ryujinx User Save를 WebDAV로 동기화하는 로�
 
 설치 프로그램은 [Git for Windows](https://git-scm.com/downloads/win), [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), [Node.js](https://nodejs.org/en/download) 공식 사이트에서 받으세요. .NET은 Runtime이 아닌 **SDK**를 선택해야 빌드와 테스트가 가능합니다.
 
-현재 GitHub 저장소에는 소스만 올려 두었습니다. 이전 개발 환경의 `artifacts` 폴더나 실행 파일은 Git에 포함되어 있지 않으므로, 저장소를 복제한 뒤 아래 명령으로 빌드해야 합니다. GitHub의 소스 ZIP만 내려받아도 실행 파일이 바로 생기지는 않습니다.
+[GitHub Releases](https://github.com/tugsis/ryujinx-save-sync/releases)에서 실행 파일을 다운로드할 수 있습니다. 초기 버전은 **Pre-release(시험판)**로 표시됩니다.
+
+- Windows 11 x64: `ryusync-버전-win-x64.zip` 전체를 압축 해제하고 PowerShell에서 `.\ryusync.exe serve`를 실행합니다.
+- SteamOS / Linux x64: `ryusync-버전-linux-x64.tar.gz` 전체를 빈 폴더에 압축 해제하고 `./ryusync serve`를 실행합니다. 필요하면 먼저 `chmod +x ryusync`를 실행하세요.
+- 콘솔에 표시된 설정 링크를 같은 기기의 브라우저로 엽니다. 백엔드 실행 중 설정 페이지를 다시 열려면 별도 터미널에서 `open` 명령을 사용합니다.
+- `SHA256SUMS.txt`로 다운로드 파일의 SHA256을 확인할 수 있습니다. Windows는 `Get-FileHash 파일명 -Algorithm SHA256`, Linux는 같은 폴더에서 `sha256sum -c SHA256SUMS.txt --ignore-missing`을 사용합니다.
+
+GitHub의 **Source code** ZIP은 실행 파일이 아닙니다. 소스에서 직접 빌드하려면 아래 절차를 따르세요. SteamOS용 실행 파일은 NAS에 설치하지 않습니다. NAS에는 WebDAV 서버만 필요합니다.
 
 `--self-contained true`로 만든 배포 폴더에는 .NET 런타임이 포함됩니다. **대상 기기에 .NET SDK나 Node.js를 설치하지 않고도 실행할 수 있습니다.** 다만 Linux의 기본 시스템 라이브러리까지 포함하는 것은 아닙니다. [Microsoft 배포 문서](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-publish)
 
@@ -353,6 +360,17 @@ Steam에서 플레이
 3. 별도의 새 배포 폴더로 전체 파일을 복사해 실행합니다. 기존 실행 중인 DLL만 교체하지 않습니다.
 4. 기존 상태 폴더와 백업은 보존하고 동일한 `--data-dir` 설정을 유지합니다. 실행 파일 경로를 옮겼다면 Steam 대상도 수정합니다.
 
+### 관리자가 새 릴리스 배포하기
+
+`Directory.Build.props`의 `Version`을 갱신하고, `docs/releases/v버전.md`에 릴리스 설명을 작성해 커밋·푸시합니다. 해당 커밋에 버전 태그를 붙여 푸시하면 `.github/workflows/release.yml`이 Windows·Linux에서 테스트 후 실행 파일, 압축파일, 체크섬을 생성하고 GitHub Release를 게시합니다.
+
+```bash
+git tag v0.1.0-alpha.1
+git push origin v0.1.0-alpha.1
+```
+
+위 태그는 첫 배포 예시입니다. 다음 배포에는 새 버전을 사용하세요. `-alpha.1`처럼 하이픈이 있는 태그는 시험판으로 게시합니다. 배포가 실패하면 GitHub Actions의 Release 실행에서 오류를 확인하고 수정합니다. 인증서·개인키·로컬 상태 폴더는 배포물에 포함하지 않습니다.
+
 ### 자주 발생하는 문제
 
 | 증상 | 확인할 내용 |
@@ -360,7 +378,7 @@ Steam에서 플레이
 | Linux에서 `dotnet: command not found` | .NET 10 SDK를 설치하고 `~/.dotnet`을 PATH에 추가. 현재 터미널은 `source ~/.bashrc`로 갱신 |
 | `A compatible .NET SDK was not found` | `dotnet --list-sdks`에서 10.0 SDK 확인. 빌드에는 Runtime·Host 대신 SDK가 필요 |
 | PowerShell이 `npm.ps1` 실행을 차단함 | `npm` 대신 `npm.cmd`로 같은 명령 실행. 예: `npm.cmd --prefix frontend ci` |
-| GitHub에서 실행 파일을 찾을 수 없음 | 현재 소스 저장소이므로 OS별 publish를 먼저 실행 |
+| GitHub에서 실행 파일을 찾을 수 없음 | Releases의 시험판을 포함해 확인. Source code 대신 OS에 맞는 첨부 압축파일 다운로드 |
 | 설정 링크에서 연결 필요·401 표시 | 같은 상태 폴더로 `open` 실행. 오래된 일회성 링크를 재사용하지 않음 |
 | 빈 화면·화면 파일 없음 | `npm --prefix frontend run build` 후 다시 publish. 배포 폴더 전체를 복사했는지 확인 |
 | 이미 실행 중·파일 잠금·포트 충돌 | 동일 상태 폴더의 백엔드 중복 실행 확인. 기존 프로세스를 확인한 뒤 정상 종료 |

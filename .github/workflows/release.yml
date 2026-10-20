@@ -1,0 +1,80 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
+      - run: dotnet build backend/RyuSync.Api
+      - run: dotnet test backend/RyuSync.Tests
+      - if: runner.os == 'Linux'
+        run: python3 tests/integration.py
+      - name: Publish self-contained application
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet publish backend/RyuSync.Api -c Release -r "$RID" --self-contained true -p:Version="$version" -o "artifacts/$RID"
+          cp README.md "artifacts/$RID/README.md"
+          mkdir -p artifacts/release
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x artifacts/linux-x64/ryusync
+          tar -czf "artifacts/release/ryusync-${GITHUB_REF_NAME}-linux-x64.tar.gz" -C artifacts/linux-x64 .
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/win-x64/* -DestinationPath "artifacts/release/ryusync-$env:GITHUB_REF_NAME-win-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.rid }}
+          path: artifacts/release/*
+          if-no-files-found: error
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts/release
+      - name: Create checksums and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts/release
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          args=(--verify-tag --title "RyuSync $GITHUB_REF_NAME")
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then args+=(--prerelease); fi
+          notes="../../docs/releases/$GITHUB_REF_NAME.md"
+          if [[ -f "$notes" ]]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
+          gh release create "$GITHUB_REF_NAME" ./* "${args[@]}"
