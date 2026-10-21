@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { FieldRequirement } from "./FieldRequirement";
 import {
   api,
   type Settings,
@@ -16,7 +17,8 @@ type Props = {
   dirty: boolean;
   change: (installations: Installation[]) => void;
   action: (fn: () => Promise<void>) => Promise<void>;
-  scan: (installationId: string) => Promise<void>;
+  scan: (installationId: string, saveFirst?: boolean) => Promise<void>;
+  save: () => Promise<void>;
   imported: () => Promise<void>;
 };
 export function EmulatorSettings({
@@ -28,6 +30,7 @@ export function EmulatorSettings({
   change,
   action,
   scan,
+  save,
   imported,
 }: Props) {
   const [profile, setProfile] = useState<LaunchProfile>({
@@ -80,140 +83,240 @@ export function EmulatorSettings({
               이전 설정을 가져온 뒤 사용하세요.
             </div>
           )}
-          {settings.installations.map((i) => (
-            <div className="installation-editor" key={i.id}>
-              <div className="form-row">
+          <p className="hint">
+            필수 항목과 탐색 경로를 입력하세요. 실행 파일은 Steam에서
+            에뮬레이터를 실행할 때만 필요하며, 빌드·작업 디렉터리·인수는 비워도
+            게임 탐색이 가능합니다.
+          </p>
+          {settings.installations.map((i) => {
+            const scanBlocked = busy
+              ? "작업 중입니다. 완료되면 게임을 탐색할 수 있습니다."
+              : !i.name.trim()
+                ? "필수 항목인 설치본 이름을 입력하세요."
+                : !i.dataRoot.trim() &&
+                    (i.kind !== "yuzu" || !i.nandRoot.trim())
+                  ? i.kind === "yuzu"
+                    ? "데이터 루트 또는 커스텀 NAND 루트 중 하나를 입력하세요."
+                    : "데이터 루트를 입력하세요."
+                  : "";
+            return (
+              <div className="installation-editor" key={i.id}>
+                <div className="form-row">
+                  <label className="field">
+                    <span>
+                      설치본 이름 <FieldRequirement value="필수" />
+                    </span>
+                    <input
+                      required
+                      value={i.name}
+                      onChange={(e) => update(i.id, { name: e.target.value })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>
+                      에뮬레이터 <FieldRequirement value="필수" />
+                    </span>
+                    <select
+                      required
+                      value={i.kind}
+                      onChange={(e) =>
+                        update(i.id, {
+                          kind: e.target.value as Installation["kind"],
+                        })
+                      }
+                    >
+                      <option value="ryujinx">Ryujinx</option>
+                      <option value="yuzu">Yuzu</option>
+                    </select>
+                  </label>
+                </div>
                 <label className="field">
-                  <span>설치본 이름</span>
+                  <span>
+                    에뮬레이터 빌드 <FieldRequirement value="선택" />
+                  </span>
                   <input
-                    value={i.name}
-                    onChange={(e) => update(i.id, { name: e.target.value })}
+                    value={i.build}
+                    onChange={(e) => update(i.id, { build: e.target.value })}
+                    placeholder="예: 사용 중인 빌드 번호"
                   />
+                  <small>
+                    직접 확인한 빌드 번호입니다. Ryujinx↔Yuzu 교차 호환성
+                    확인을 위해 입력을 권장합니다.
+                  </small>
                 </label>
                 <label className="field">
-                  <span>에뮬레이터</span>
-                  <select
-                    value={i.kind}
+                  <span>
+                    데이터 루트{" "}
+                    <FieldRequirement
+                      value={
+                        i.kind !== "yuzu"
+                          ? "탐색 시 필수"
+                          : i.nandRoot.trim()
+                            ? "선택"
+                            : i.dataRoot.trim()
+                              ? "탐색 시 필수"
+                              : "둘 중 하나 필수"
+                      }
+                    />
+                  </span>
+                  <input
+                    required={i.kind !== "yuzu"}
+                    list={"roots-" + i.id}
+                    value={i.dataRoot}
+                    onChange={(e) => update(i.id, { dataRoot: e.target.value })}
+                  />
+                  <datalist id={"roots-" + i.id}>
+                    {candidateRoots[i.id]?.map((root) => (
+                      <option key={root} value={root} />
+                    ))}
+                  </datalist>
+                  <small>
+                    {i.kind === "yuzu"
+                      ? i.nandRoot.trim()
+                        ? "현재는 아래 커스텀 NAND 경로를 사용합니다. 이 항목은 비워도 됩니다."
+                        : "기본 NAND를 사용하면 이 경로만 입력하세요. 실제 탐색 위치는 데이터 루트/nand입니다."
+                      : "bis·games·system 폴더가 들어 있는 Ryujinx 데이터 폴더입니다."}
+                  </small>
+                </label>
+                {i.kind === "yuzu" && (
+                  <label className="field">
+                    <span>
+                      커스텀 NAND 루트{" "}
+                      <FieldRequirement
+                        value={
+                          i.dataRoot.trim()
+                            ? "선택"
+                            : i.nandRoot.trim()
+                              ? "탐색 시 필수"
+                              : "둘 중 하나 필수"
+                        }
+                      />
+                    </span>
+                    <input
+                      value={i.nandRoot}
+                      onChange={(e) =>
+                        update(i.id, { nandRoot: e.target.value })
+                      }
+                    />
+                    <small>
+                      별도 NAND를 사용하면 이 경로만 입력해도 됩니다. 비우면 위
+                      데이터 루트/nand를 사용합니다. 두 경로를 모두 입력할
+                      필요는 없습니다.
+                    </small>
+                  </label>
+                )}
+                <label className="field">
+                  <span>
+                    실제 실행 파일{" "}
+                    <FieldRequirement value="Steam 실행 시 필수" />
+                  </span>
+                  <input
+                    value={i.executable}
                     onChange={(e) =>
-                      update(i.id, {
-                        kind: e.target.value as Installation["kind"],
-                      })
+                      update(i.id, { executable: e.target.value })
+                    }
+                  />
+                  <small>
+                    EXE 또는 직접 실행 가능한 Linux 바이너리입니다. 게임 탐색과
+                    웹 동기화만 사용할 때는 비워도 됩니다.
+                  </small>
+                </label>
+                <label className="field">
+                  <span>
+                    작업 디렉터리 <FieldRequirement value="선택" />
+                  </span>
+                  <input
+                    value={i.workingDirectory}
+                    onChange={(e) =>
+                      update(i.id, { workingDirectory: e.target.value })
+                    }
+                  />
+                  <small>비우면 실행 파일이 있는 폴더를 사용합니다.</small>
+                </label>
+                <label className="field">
+                  <span>
+                    기본 실행 인수 <FieldRequirement value="선택" />
+                  </span>
+                  <textarea
+                    rows={3}
+                    value={i.arguments.join("\n")}
+                    onChange={(e) =>
+                      update(i.id, { arguments: e.target.value.split("\n") })
+                    }
+                  />
+                  <small>필요한 경우 한 줄에 인수 하나씩 입력하세요.</small>
+                </label>
+                <div className="row-actions">
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      action(async () =>
+                        setCandidateRoots({
+                          ...candidateRoots,
+                          [i.id]: await api<string[]>(
+                            "/emulators/" +
+                              i.kind +
+                              "/candidates?executable=" +
+                              encodeURIComponent(i.executable),
+                          ),
+                        }),
+                      )
                     }
                   >
-                    <option value="ryujinx">Ryujinx</option>
-                    <option value="yuzu">Yuzu</option>
-                  </select>
-                </label>
-              </div>
-              <label className="field">
-                <span>에뮬레이터 빌드 · 직접 확인한 버전</span>
-                <input
-                  value={i.build}
-                  onChange={(e) => update(i.id, { build: e.target.value })}
-                  placeholder="예: 사용 중인 빌드 번호"
-                />
-              </label>
-              <label className="field">
-                <span>데이터 루트</span>
-                <input
-                  list={"roots-" + i.id}
-                  value={i.dataRoot}
-                  onChange={(e) => update(i.id, { dataRoot: e.target.value })}
-                />
-                <datalist id={"roots-" + i.id}>
-                  {candidateRoots[i.id]?.map((root) => (
-                    <option key={root} value={root} />
-                  ))}
-                </datalist>
-              </label>
-              {i.kind === "yuzu" && (
-                <label className="field">
-                  <span>커스텀 NAND 루트 · 비우면 데이터 루트/nand</span>
-                  <input
-                    value={i.nandRoot}
-                    onChange={(e) => update(i.id, { nandRoot: e.target.value })}
-                  />
-                </label>
-              )}
-              <label className="field">
-                <span>
-                  실제 실행 파일 · EXE 또는 직접 실행 가능한 Linux 바이너리
-                </span>
-                <input
-                  value={i.executable}
-                  onChange={(e) => update(i.id, { executable: e.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>작업 디렉터리 · 선택</span>
-                <input
-                  value={i.workingDirectory}
-                  onChange={(e) =>
-                    update(i.id, { workingDirectory: e.target.value })
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>기본 실행 인수 · 한 줄에 하나</span>
-                <textarea
-                  rows={3}
-                  value={i.arguments.join("\n")}
-                  onChange={(e) =>
-                    update(i.id, { arguments: e.target.value.split("\n") })
-                  }
-                />
-              </label>
-              <div className="row-actions">
-                <button
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() =>
-                    action(async () =>
-                      setCandidateRoots({
-                        ...candidateRoots,
-                        [i.id]: await api<string[]>(
-                          "/emulators/" +
-                            i.kind +
-                            "/candidates?executable=" +
-                            encodeURIComponent(i.executable),
+                    경로 후보 찾기
+                  </button>
+                  <button
+                    disabled={!!scanBlocked}
+                    aria-describedby={"scan-help-" + i.id}
+                    onClick={() => action(() => scan(i.id, dirty))}
+                  >
+                    {dirty ? "저장 후 게임 탐색" : "게임 탐색"}
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={busy || !dirty}
+                    onClick={() => action(save)}
+                  >
+                    설정 저장
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={
+                      busy ||
+                      bindings.some((b) => b.installationId === i.id) ||
+                      profiles.some((p) => p.installationId === i.id)
+                    }
+                    onClick={() =>
+                      change(
+                        settings.installations.filter(
+                          (other) => other.id !== i.id,
                         ),
-                      }),
-                    )
-                  }
+                      )
+                    }
+                  >
+                    설치본 삭제
+                  </button>
+                </div>
+                <p
+                  id={"scan-help-" + i.id}
+                  className="scan-guidance"
+                  role="status"
                 >
-                  경로 후보 찾기
-                </button>
-                <button
-                  disabled={busy || dirty}
-                  onClick={() => action(() => scan(i.id))}
-                >
-                  저장된 설치본 탐색
-                </button>
-                <button
-                  className="text-button"
-                  disabled={
-                    busy ||
-                    bindings.some((b) => b.installationId === i.id) ||
-                    profiles.some((p) => p.installationId === i.id)
-                  }
-                  onClick={() =>
-                    change(
-                      settings.installations.filter(
-                        (other) => other.id !== i.id,
-                      ),
-                    )
-                  }
-                >
-                  설치본 삭제
-                </button>
+                  {scanBlocked ||
+                    (dirty
+                      ? "변경한 설정을 저장한 뒤 이 설치본의 게임·세이브를 탐색합니다."
+                      : "설정이 저장되었습니다. 게임 탐색을 눌러 이 설치본의 게임·세이브를 찾으세요.")}
+                  {!scanBlocked && " 탐색 전에 에뮬레이터를 완전히 종료하세요."}
+                </p>
+                <small className="hint">
+                  연결된 게임이 있으면 종류·경로·빌드는 변경할 수 없습니다.
+                  AppImage·Flatpak 자동 실행은 아직 지원하지 않으며 종료 후 웹
+                  동기화는 가능합니다.
+                </small>
               </div>
-              <small className="hint">
-                연결된 게임이 있으면 종류·경로·빌드는 변경할 수 없습니다.
-                AppImage·Flatpak 자동 실행은 아직 지원하지 않으며 종료 후 웹
-                동기화는 가능합니다.
-              </small>
-            </div>
-          ))}
+            );
+          })}
           <button
             className="secondary"
             disabled={busy || settings.protocolVersion !== 2}
@@ -237,8 +340,9 @@ export function EmulatorSettings({
             ＋ 설치본 추가
           </button>
           <p className="hint">
-            추가·변경한 뒤 아래 ‘설정 저장’을 눌러주세요. 세이브 내부의 프로필
-            ID를 바꾸거나 프로필 DB를 복사하지 않습니다.
+            ‘저장 후 게임 탐색’으로 바로 진행하거나, ‘설정 저장’ 후 ‘게임
+            탐색’을 누르세요. 세이브 내부의 프로필 ID를 바꾸거나 프로필 DB를
+            복사하지 않습니다.
           </p>
         </div>
       </section>
@@ -277,14 +381,18 @@ export function EmulatorSettings({
             </select>
           </label>
           <label className="field">
-            <span>프로필 이름</span>
+            <span>
+              프로필 이름 <FieldRequirement value="필수" />
+            </span>
             <input
               value={profile.name}
               onChange={(e) => setProfile({ ...profile, name: e.target.value })}
             />
           </label>
           <label className="field">
-            <span>실행할 설치본</span>
+            <span>
+              실행할 설치본 <FieldRequirement value="필수" />
+            </span>
             <select
               value={profile.installationId}
               onChange={(e) =>
@@ -326,7 +434,9 @@ export function EmulatorSettings({
               </label>
             ))}
           <label className="field">
-            <span>프로필 추가 인수 · 한 줄에 하나</span>
+            <span>
+              프로필 추가 인수 <FieldRequirement value="선택" />
+            </span>
             <textarea
               rows={3}
               value={profileArgs}
@@ -390,7 +500,9 @@ export function EmulatorSettings({
         </div>
         <div className="card-body">
           <label className="field">
-            <span>이전 상태 폴더 · state.db가 있는 폴더</span>
+            <span>
+              이전 상태 폴더 <FieldRequirement value="가져오기 시 필수" />
+            </span>
             <input
               value={sourceRoot}
               onChange={(e) => setSourceRoot(e.target.value)}

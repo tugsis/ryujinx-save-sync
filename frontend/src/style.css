@@ -1034,3 +1034,28 @@ footer > small {
   flex-wrap: wrap;
   margin: 16px 0;
 }
+
+.field-requirement {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.field-requirement.required {
+  color: #864324;
+  background: #fff1e7;
+}
+.field-requirement.optional {
+  color: #53685b;
+  background: #edf3ee;
+}
+.scan-guidance {
+  color: #53685b;
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 12px 0;
+}

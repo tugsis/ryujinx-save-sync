@@ -14,6 +14,7 @@ import {
 } from "./api";
 import "./style.css";
 import { EmulatorSettings } from "./EmulatorSettings";
+import { FieldRequirement } from "./FieldRequirement";
 import type { LaunchProfile, RestoreReservation } from "./api";
 const time = (value: string) => new Date(value).toLocaleString("ko-KR");
 const labels: Record<string, string> = {
@@ -156,8 +157,12 @@ function App() {
         : "동기화를 요청했습니다. 작업 기록에서 진행 상황을 확인하세요.",
     );
   }
-  async function scan(installationId = scanId) {
-    if (dirty) throw new Error("경로 변경 사항을 먼저 저장하세요.");
+  async function scan(installationId = scanId, saveFirst = false) {
+    if (saveFirst) await save();
+    else if (dirty)
+      throw new Error(
+        "경로 변경 사항을 먼저 저장하거나 설정에서 ‘저장 후 게임 탐색’을 누르세요.",
+      );
     const r = await api<{ saves: Save[]; warnings: string[] }>(
       "/installations/" + installationId + "/scan",
       "POST",
@@ -323,7 +328,7 @@ function App() {
                   </div>
                   <div className="card-body">
                     <div className="form-row">
-                      <Field label="기기 이름">
+                      <Field label="기기 이름" requirement="필수">
                         <input
                           value={settings.deviceName}
                           onChange={(e) => change("deviceName", e.target.value)}
@@ -355,7 +360,10 @@ function App() {
                         <small>다음 단계에 제공 예정</small>
                       </div>
                     </div>
-                    <Field label="WebDAV 서버 주소">
+                    <Field
+                      label="WebDAV 서버 주소"
+                      requirement="동기화 시 필수"
+                    >
                       <input
                         type="url"
                         placeholder="https://nas.example.com/webdav/"
@@ -364,13 +372,19 @@ function App() {
                       />
                     </Field>
                     <div className="form-row">
-                      <Field label="사용자 이름">
+                      <Field
+                        label="사용자 이름"
+                        requirement="서버 인증 시 필수"
+                      >
                         <input
                           value={settings.webDavUser}
                           onChange={(e) => change("webDavUser", e.target.value)}
                         />
                       </Field>
-                      <Field label="비밀번호 · 실행 종료 시 삭제">
+                      <Field
+                        label="비밀번호 · 실행 종료 시 삭제"
+                        requirement="잠금 해제 시 필수"
+                      >
                         <input
                           type="password"
                           autoComplete="off"
@@ -384,7 +398,7 @@ function App() {
                         />
                       </Field>
                     </div>
-                    <Field label="동기화 공간 이름">
+                    <Field label="동기화 공간 이름" requirement="필수">
                       <input
                         value={settings.workspace}
                         onChange={(e) => change("workspace", e.target.value)}
@@ -448,7 +462,10 @@ function App() {
                     </div>
                   </div>
                   <div className="card-body">
-                    <Field label="Ryujinx 데이터 폴더">
+                    <Field
+                      label="Ryujinx 데이터 폴더"
+                      requirement="Ryujinx 탐색 시 필수"
+                    >
                       <input
                         placeholder="Ryujinx 데이터 루트"
                         list="roots"
@@ -467,12 +484,26 @@ function App() {
                       </span>
                       <button
                         className="secondary"
-                        disabled={busy || dirty || !settings.dataRoot}
-                        onClick={() => action(() => scan("legacy"))}
+                        disabled={busy || !settings.dataRoot.trim()}
+                        aria-describedby="legacy-scan-help"
+                        onClick={() => action(() => scan("legacy", dirty))}
                       >
-                        ↻ 게임 탐색
+                        {dirty ? "저장 후 게임 탐색" : "↻ 게임 탐색"}
                       </button>
                     </div>
+                    <p
+                      id="legacy-scan-help"
+                      className="scan-guidance"
+                      role="status"
+                    >
+                      {busy
+                        ? "작업이 끝나면 탐색할 수 있습니다."
+                        : !settings.dataRoot.trim()
+                          ? "Ryujinx 데이터 폴더를 입력하면 게임 탐색이 활성화됩니다."
+                          : dirty
+                            ? "변경한 설정을 저장한 뒤 Ryujinx의 게임·세이브를 탐색합니다."
+                            : "에뮬레이터를 완전히 종료하고 게임 탐색을 누르세요."}
+                    </p>
                   </div>
                 </section>
                 <section className="card">
@@ -486,14 +517,20 @@ function App() {
                     </div>
                   </div>
                   <div className="card-body">
-                    <Field label="Ryujinx 실행 파일 · 실제 네이티브 실행 파일">
+                    <Field
+                      label="Ryujinx 실행 파일 · 실제 네이티브 실행 파일"
+                      requirement="Steam 실행 시 필수"
+                    >
                       <input
                         value={settings.executable}
                         onChange={(e) => change("executable", e.target.value)}
                         placeholder="Ryujinx.exe 또는 Linux 실행 파일"
                       />
                     </Field>
-                    <Field label="작업 디렉터리 · 비우면 실행 파일 폴더">
+                    <Field
+                      label="작업 디렉터리 · 비우면 실행 파일 폴더"
+                      requirement="선택"
+                    >
                       <input
                         value={settings.workingDirectory}
                         onChange={(e) =>
@@ -501,7 +538,10 @@ function App() {
                         }
                       />
                     </Field>
-                    <Field label="실행 인수 · 한 줄에 인수 하나씩">
+                    <Field
+                      label="실행 인수 · 한 줄에 인수 하나씩"
+                      requirement="선택"
+                    >
                       <textarea
                         rows={3}
                         value={argsText}
@@ -539,6 +579,7 @@ function App() {
                   change={(value) => change("installations", value)}
                   action={action}
                   scan={scan}
+                  save={save}
                   imported={async () => {
                     const value = await api<Settings>("/settings");
                     setSettings(value);
@@ -1173,14 +1214,24 @@ function App() {
 }
 function Field({
   label,
+  requirement,
   children,
 }: {
   label: string;
+  requirement?: string;
   children: React.ReactNode;
 }) {
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>
+        {label}
+        {requirement && (
+          <>
+            {" "}
+            <FieldRequirement value={requirement} />
+          </>
+        )}
+      </span>
       {children}
     </label>
   );
