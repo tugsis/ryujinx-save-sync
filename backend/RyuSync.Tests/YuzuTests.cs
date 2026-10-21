@@ -164,10 +164,17 @@ public class YuzuTests
     public void ImportUsesSqliteBackupWithoutChangingOriginalSettings()
     {
         using var f = new Fixture(); var source = f.Device("old"); source.Db.Put("binding", source.Binding.Id, source.Binding);
-        var original = File.ReadAllBytes(Path.Combine(source.Db.Root, "state.db"));
+        // SQLite keeps native read/write handles open while WAL is active.
+        // This is only a byte comparison; the actual backup uses SQLite's API.
+        static byte[] ReadShared(string path)
+        {
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var output = new MemoryStream(); input.CopyTo(output); return output.ToArray();
+        }
+        var original = ReadShared(Path.Combine(source.Db.Root, "state.db"));
         var copy = LegacyImport.Read(source.Db.Root, Path.Combine(f.Root, "new-state"));
         Assert.Single(copy.Bindings); Assert.Equal(1, copy.Settings.ProtocolVersion); Assert.True(File.Exists(copy.BackupPath));
-        Assert.Equal(original, File.ReadAllBytes(Path.Combine(source.Db.Root, "state.db"))); Assert.Equal(1, source.Db.Settings.ProtocolVersion);
+        Assert.Equal(original, ReadShared(Path.Combine(source.Db.Root, "state.db"))); Assert.Equal(1, source.Db.Settings.ProtocolVersion);
     }
     [Fact]
     public void ImportRejectsUnsentWork()
