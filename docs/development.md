@@ -20,8 +20,8 @@ dotnet publish backend/RyuSync.Api -c Release -r win-x64 --self-contained true -
 
 ## 상태 파일
 
-- Windows: `%LOCALAPPDATA%\RyuSync`
-- Linux: `$XDG_STATE_HOME/ryusync` 또는 `~/.local/state/ryusync`
+- Windows: `%LOCALAPPDATA%\RyuSync-v2`
+- Linux: `$XDG_STATE_HOME/ryusync-v2` 또는 `~/.local/state/ryusync-v2`
 - `--data-dir` 또는 `RYUSYNC_DATA_DIR`로 변경 가능. 실제 세이브 경로 안에 두지 마세요.
 
 `state.db`는 SQLite WAL 모드로 설정·연결·기준 버전·작업·미전송 스냅샷·교체 저널을 보관합니다. `instance.json`은 실행 중인 로컬 API 인증 정보를 담으며 Git이나 외부 서버로 올리지 마세요. Linux에서는 상태 폴더를 사용자 전용 권한으로 만듭니다.
@@ -38,6 +38,12 @@ LibHac 0.19.0의 공개 `SaveDataAttribute`와 `SaveDataIndexerValue` 구조를 
 - [Ryujinx 세이브 관리자 구현](https://git.axenov.dev/Museum/ryujinx/commit/d9053bbe3745846dd758561e24dd060d76b3ad9d)
 
 실기 검증 전에는 특정 포크의 전체 호환성을 보장하지 않습니다. 합성 fixture의 통과는 바이너리 형식 처리와 안전성에 대한 검증이며 실제 게임의 호환성 검증과 구분합니다.
+
+## Yuzu 및 다중 설치본
+
+`Emulators.cs`는 Ryujinx/Yuzu 어댑터, 정규화된 경로 탐색, 로컬 관리 파일 정책과 교차 호환성 승인 서명을 제공합니다. `Binding`별 baseline을 유지하고 같은 Title ID·Slot의 여러 로컬 설치본을 순차 비교합니다. `LegacyImport.cs`는 읽기 전용 원본을 SQLite 백업 API로 복제하고 미전송·미완료 작업을 검사합니다.
+
+새 상태 폴더의 API는 protocolVersion=2를 사용합니다. 모델의 기본값 1은 기존 JSON과 기존 저장소의 호환 읽기를 위한 값입니다. 새 원격 prefix는 `ryusync-v2/<workspace>`이며 v1과 이력·Scope를 공유하지 않습니다. 단위 테스트 외에 Linux에서 `python3 tests/yuzu_integration.py`를 실행하세요. [상세 사용법](yuzu.md)
 
 ## 구현 경계
 

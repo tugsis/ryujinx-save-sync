@@ -13,6 +13,8 @@ import {
   type Session,
 } from "./api";
 import "./style.css";
+import { EmulatorSettings } from "./EmulatorSettings";
+import type { LaunchProfile, RestoreReservation } from "./api";
 const time = (value: string) => new Date(value).toLocaleString("ko-KR");
 const labels: Record<string, string> = {
   completed: "완료",
@@ -27,6 +29,7 @@ const labels: Record<string, string> = {
   uploaded: "업로드",
   downloaded: "다운로드",
   empty: "빈 세이브",
+  "compatibility-required": "호환성 확인 필요",
   preparing: "실행 준비",
   playing: "플레이 중",
   "post-sync": "종료 후 동기화",
@@ -42,6 +45,11 @@ function App() {
     [jobs, setJobs] = useState<Job[]>([]),
     [backups, setBackups] = useState<Backup[]>([]),
     [sessions, setSessions] = useState<Session[]>([]);
+  const [profiles, setProfiles] = useState<LaunchProfile[]>([]);
+  const [reservations, setReservations] = useState<RestoreReservation[]>([]);
+  const [scanId, setScanId] = useState("legacy");
+  const [launchId, setLaunchId] = useState("");
+  const [gameVersions, setGameVersions] = useState<Record<string, string>>({});
   const [found, setFound] = useState<Save[]>([]),
     [warnings, setWarnings] = useState<string[]>([]),
     [slots, setSlots] = useState<Record<string, string>>({}),
@@ -54,18 +62,22 @@ function App() {
     [dirty, setDirty] = useState(false),
     [conflict, setConflict] = useState<Outcome | null>(null);
   async function refresh() {
-    const [s, b, j, ba, se] = await Promise.all([
+    const [s, b, j, ba, se, pr, re] = await Promise.all([
       api<Status>("/status"),
       api<Binding[]>("/save-sets"),
       api<Job[]>("/jobs"),
       api<Backup[]>("/backups"),
       api<Session[]>("/launch-sessions"),
+      api<LaunchProfile[]>("/launch-profiles"),
+      api<RestoreReservation[]>("/restore-reservations"),
     ]);
     setStatus(s);
     setBindings(b);
     setJobs(j);
     setBackups(ba);
     setSessions(se);
+    setProfiles(pr);
+    setReservations(re);
   }
   useEffect(() => {
     let live = true;
@@ -144,13 +156,14 @@ function App() {
         : "동기화를 요청했습니다. 작업 기록에서 진행 상황을 확인하세요.",
     );
   }
-  async function scan() {
+  async function scan(installationId = scanId) {
     if (dirty) throw new Error("경로 변경 사항을 먼저 저장하세요.");
     const r = await api<{ saves: Save[]; warnings: string[] }>(
-      "/ryujinx/scan",
+      "/installations/" + installationId + "/scan",
       "POST",
       {},
     );
+    setScanId(installationId);
     setFound(r.saves);
     setWarnings(r.warnings);
     setPage("games");
@@ -189,7 +202,14 @@ function App() {
         )}
       </div>
     );
-  const name = (id: string) => bindings.find((b) => b.id === id)?.title ?? id;
+  const name = (id: string) => {
+    const b = bindings.find((b) => b.id === id);
+    return b ? `${b.title} · ${b.emulatorKind} · ${b.slot}` : id;
+  };
+  const installations = [
+    { id: "legacy", name: "기본 Ryujinx", kind: "ryujinx" },
+    ...(settings?.installations ?? []),
+  ];
   return (
     <div className="app">
       <aside className="sidebar">
@@ -370,8 +390,11 @@ function App() {
                         onChange={(e) => change("workspace", e.target.value)}
                       />
                       <small>
-                        두 기기에 같은 이름을 입력하세요. 서버의 ryusync/이름
-                        아래에 보관합니다.
+                        두 기기에 같은 이름을 입력하세요. 서버의{" "}
+                        {settings.protocolVersion === 2
+                          ? "ryusync-v2"
+                          : "ryusync"}
+                        /이름 아래에 보관합니다.
                       </small>
                     </Field>
                     <label className="checkbox">
@@ -445,7 +468,7 @@ function App() {
                       <button
                         className="secondary"
                         disabled={busy || dirty || !settings.dataRoot}
-                        onClick={() => action(scan)}
+                        onClick={() => action(() => scan("legacy"))}
                       >
                         ↻ 게임 탐색
                       </button>
@@ -507,6 +530,26 @@ function App() {
                     </p>
                   </div>
                 </section>
+                <EmulatorSettings
+                  settings={settings}
+                  bindings={bindings}
+                  profiles={profiles}
+                  busy={busy}
+                  dirty={dirty}
+                  change={(value) => change("installations", value)}
+                  action={action}
+                  scan={scan}
+                  imported={async () => {
+                    const value = await api<Settings>("/settings");
+                    setSettings(value);
+                    setArgsText(value.arguments.join("\n"));
+                    setDirty(false);
+                    setFound([]);
+                    setNotice(
+                      "설정과 연결을 가져왔습니다. 비밀번호를 다시 입력한 뒤 v1 서버 버전을 가져오거나 로컬 세이브를 동기화하세요.",
+                    );
+                  }}
+                />
                 <div className="save-bar">
                   <span>
                     {dirty
@@ -578,23 +621,41 @@ function App() {
                 <div className="card-head">
                   <div>
                     <h2>플레이 준비</h2>
-                    <p>선택된 게임 전체를 동기화한 뒤 Ryujinx를 실행합니다.</p>
+                    <p>
+                      실행 프로필에 연결된 게임 그룹을 비교한 뒤 선택한
+                      에뮬레이터를 실행합니다.
+                    </p>
                   </div>
                 </div>
                 <div className="card-body">
                   <div className="flow">
                     동기화 확인 → 플레이 → 종료 후 업로드
                   </div>
+                  <Field label="실행 프로필">
+                    <select
+                      value={launchId}
+                      onChange={(e) => setLaunchId(e.target.value)}
+                    >
+                      <option value="">기본 Ryujinx</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                   <button
                     disabled={busy || !!status?.launch}
                     onClick={() =>
                       action(async () => {
-                        await api("/launch-sessions", "POST", {});
+                        await api("/launch-sessions", "POST", {
+                          launchProfileId: launchId || null,
+                        });
                         setNotice("실행 전 동기화를 시작했습니다.");
                       })
                     }
                   >
-                    ▷ 동기화 후 Ryujinx 실행
+                    ▷ 동기화 후 에뮬레이터 실행
                   </button>
                   {sessions[0] && (
                     <div className="session-state">
@@ -657,6 +718,45 @@ function App() {
                   </button>
                 </div>
                 <div className="card-body">
+                  <Field label="탐색·서버 복원 대상 설치본">
+                    <select
+                      value={scanId}
+                      onChange={(e) => {
+                        setScanId(e.target.value);
+                        setFound([]);
+                        setWarnings([]);
+                      }}
+                    >
+                      {installations.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {i.name} ({i.kind})
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {reservations
+                    .filter((r) => r.installationId === scanId)
+                    .map((r) => (
+                      <div className="warning" key={r.id}>
+                        {r.titleId} · {r.slot}: 서버 복원 예약됨. 해당 프로필로
+                        게임을 수동 실행·저장·종료하고 다시 탐색한 뒤 ‘예약 복원
+                        연결’을 누르세요.
+                        <button
+                          className="text-button"
+                          disabled={busy}
+                          onClick={() =>
+                            action(async () => {
+                              await api(
+                                "/restore-reservations/" + r.id,
+                                "DELETE",
+                              );
+                            })
+                          }
+                        >
+                          예약 해제
+                        </button>
+                      </div>
+                    ))}
                   {warnings.map((w) => (
                     <div className="warning" key={w}>
                       {w}
@@ -664,7 +764,8 @@ function App() {
                   ))}
                   {!found.length && (
                     <p className="empty">
-                      설정에서 Ryujinx 데이터 폴더를 저장한 뒤 탐색하세요.
+                      설정에서 설치본의 데이터/NAND 폴더를 저장하고 선택한
+                      설치본을 탐색하세요.
                     </p>
                   )}
                   {found.map((s) => (
@@ -673,16 +774,42 @@ function App() {
                       <div className="game-info">
                         <h3>{s.title}</h3>
                         <code>{s.titleId}</code>
-                        <small>프로필: {s.profileName}</small>
+                        <small>
+                          {s.emulatorKind} · 프로필: {s.profileName}
+                        </small>
+                        <small>
+                          {s.status === "ready"
+                            ? "탐색 완료"
+                            : "게임 초기화 필요"}
+                        </small>
                         <small className="file-path">{s.contentPath}</small>
                       </div>
                       <div className="game-controls">
                         <input
                           aria-label={s.title + " 프로필 연결 이름"}
                           placeholder="프로필 연결 이름"
-                          value={slots[s.userId] ?? "main"}
+                          value={
+                            slots[s.id] ??
+                            reservations.find(
+                              (r) =>
+                                r.installationId === s.installationId &&
+                                r.titleId === s.titleId,
+                            )?.slot ??
+                            "main"
+                          }
                           onChange={(e) =>
-                            setSlots({ ...slots, [s.userId]: e.target.value })
+                            setSlots({ ...slots, [s.id]: e.target.value })
+                          }
+                        />
+                        <input
+                          aria-label={s.title + " 게임 버전"}
+                          placeholder="게임 버전 (선택)"
+                          value={gameVersions[s.id] ?? ""}
+                          onChange={(e) =>
+                            setGameVersions({
+                              ...gameVersions,
+                              [s.id]: e.target.value,
+                            })
                           }
                         />
                         {bindings.some((b) => b.id === s.id) ? (
@@ -694,13 +821,34 @@ function App() {
                               action(async () => {
                                 await api("/save-sets", "POST", {
                                   discoveryId: s.id,
-                                  slot: slots[s.userId] ?? "main",
+                                  installationId: s.installationId,
+                                  gameVersion: gameVersions[s.id] ?? "",
+                                  restoreReservationId:
+                                    reservations.find(
+                                      (r) =>
+                                        r.installationId === s.installationId &&
+                                        r.titleId === s.titleId,
+                                    )?.id ?? null,
+                                  slot:
+                                    slots[s.id] ??
+                                    reservations.find(
+                                      (r) =>
+                                        r.installationId === s.installationId &&
+                                        r.titleId === s.titleId,
+                                    )?.slot ??
+                                    "main",
                                 });
                                 setNotice("동기화 대상으로 등록했습니다.");
                               })
                             }
                           >
-                            등록
+                            {reservations.some(
+                              (r) =>
+                                r.installationId === s.installationId &&
+                                r.titleId === s.titleId,
+                            )
+                              ? "예약 복원 연결"
+                              : "등록"}
                           </button>
                         )}
                       </div>
@@ -723,7 +871,9 @@ function App() {
                       <div>
                         <h3>{b.title}</h3>
                         <small>
-                          {b.titleId} · {b.slot}
+                          {b.titleId} · {b.slot} · {b.emulatorKind}{" "}
+                          {b.emulatorBuild} ·{" "}
+                          {b.gameVersion || "게임 버전 미확인"}
                         </small>
                       </div>
                       <div className="row-actions">
@@ -733,6 +883,26 @@ function App() {
                           onClick={() => action(() => sync(b.id))}
                         >
                           지금 동기화
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            action(async () => {
+                              const outcome = await api<Outcome>(
+                                "/save-sets/" + b.id + "/compare",
+                                "POST",
+                                {},
+                              );
+                              if (outcome.status === "compatible")
+                                setNotice(
+                                  "다른 에뮬레이터의 이력이 없어 별도 교차 승인이 필요하지 않습니다.",
+                                );
+                              else setConflict(outcome);
+                            })
+                          }
+                        >
+                          교차 호환성 확인
                         </button>
                         <button
                           className="text-button"
@@ -790,9 +960,40 @@ function App() {
                         <div>
                           <h3>{r.title || r.titleId}</h3>
                           <small>
-                            {r.titleId} · {r.slot} · {r.deviceName}
+                            {r.titleId} · {r.slot} · {r.deviceName} ·{" "}
+                            {r.sourceEmulator} {r.sourceBuild}
                           </small>
                         </div>
+                        <button
+                          className="secondary"
+                          disabled={
+                            busy ||
+                            dirty ||
+                            bindings.some(
+                              (b) =>
+                                b.installationId === scanId &&
+                                b.titleId === r.titleId,
+                            ) ||
+                            reservations.some(
+                              (re) =>
+                                re.installationId === scanId &&
+                                re.titleId === r.titleId,
+                            )
+                          }
+                          onClick={() =>
+                            action(async () => {
+                              await api("/restore-reservations", "POST", {
+                                installationId: scanId,
+                                revisionId: r.id,
+                              });
+                              setNotice(
+                                "서버 복원을 예약했습니다. 해당 게임을 수동 실행·저장·종료하고 탐색한 뒤 예약 복원 연결을 등록하세요.",
+                              );
+                            })
+                          }
+                        >
+                          선택한 설치본에 복원 예약
+                        </button>
                         <span className="badge">
                           {bindings.some((b) => b.remoteKey === r.saveKey)
                             ? "연결됨"
@@ -871,33 +1072,92 @@ function App() {
             aria-labelledby="conflict-title"
             className="modal"
           >
-            <h2 id="conflict-title">진행 상황이 두 갈래로 나뉘었어요</h2>
+            <h2 id="conflict-title">
+              {conflict.status === "compatibility-required"
+                ? "교차 에뮬레이터 세이브 확인"
+                : "진행 상황이 두 갈래로 나뉘었어요"}
+            </h2>
             <p>{name(conflict.bindingId)}</p>
-            <div className="warning">
-              선택하지 않은 로컬 내용도 서버 버전과 백업으로 보존합니다. 상태가
-              바뀌면 다시 비교합니다.
-            </div>
-            <button
-              disabled={busy}
-              className="version-button"
-              onClick={() => action(() => resolve("local"))}
-            >
-              <strong>이 기기의 세이브 사용</strong>
-              <small>현재 로컬 진행 상황으로 통일</small>
-            </button>
-            {conflict.versions?.map((v) => (
-              <button
-                key={v.id}
-                disabled={busy}
-                className="version-button"
-                onClick={() => action(() => resolve(v.id))}
-              >
-                <strong>{v.deviceName}의 세이브 사용</strong>
-                <small>
-                  {time(v.createdAt)} · {v.id.slice(0, 8)}
-                </small>
-              </button>
-            ))}
+            {conflict.status === "compatibility-required" && (
+              <>
+                <p>{conflict.message}</p>
+                <div className="warning">
+                  같은 Title ID여도 게임 버전·모드·계정에 따라 호환되지 않을 수
+                  있습니다. 시험 적용 승인 후 다시 동기화하고, 에뮬레이터를 수동
+                  실행해 실제 로드·저장·종료를 확인하세요. 확인 전 Steam 자동
+                  실행은 차단됩니다.
+                </div>
+                {conflict.versions?.map((v) => (
+                  <p key={v.id}>
+                    {v.deviceName} · {v.sourceEmulator} {v.sourceBuild} · 게임{" "}
+                    {v.gameVersion || "버전 미확인"}
+                  </p>
+                ))}
+                {(
+                  [
+                    ["trial", "백업 후 시험 적용 승인"],
+                    ["confirmed", "게임에서 로드·저장·종료 확인 완료"],
+                  ] as const
+                ).map(([state, label]) => (
+                  <button
+                    className="version-button"
+                    key={state}
+                    disabled={busy}
+                    onClick={() =>
+                      action(async () => {
+                        await api(
+                          "/save-sets/" + conflict.bindingId + "/compatibility",
+                          "POST",
+                          {
+                            state,
+                            expectedLocalHash: conflict.localHash,
+                            expectedHeads: conflict.heads,
+                          },
+                        );
+                        setConflict(null);
+                        setNotice(
+                          state === "trial"
+                            ? "시험 적용을 승인했습니다. 다시 동기화하여 사용할 원본을 선택하세요."
+                            : "교차 호환성 확인을 기록했습니다.",
+                        );
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </>
+            )}
+            {conflict.status !== "compatibility-required" && (
+              <>
+                <div className="warning">
+                  선택하지 않은 로컬 내용도 서버 버전과 백업으로 보존합니다.
+                  상태가 바뀌면 다시 비교합니다.
+                </div>
+                <button
+                  disabled={busy}
+                  className="version-button"
+                  onClick={() => action(() => resolve("local"))}
+                >
+                  <strong>이 기기의 세이브 사용</strong>
+                  <small>현재 로컬 진행 상황으로 통일</small>
+                </button>
+                {conflict.versions?.map((v) => (
+                  <button
+                    key={v.id}
+                    disabled={busy}
+                    className="version-button"
+                    onClick={() => action(() => resolve(v.id))}
+                  >
+                    <strong>{v.deviceName}의 세이브 사용</strong>
+                    <small>
+                      {time(v.createdAt)} · {v.sourceEmulator} {v.sourceBuild} ·{" "}
+                      {v.id.slice(0, 8)}
+                    </small>
+                  </button>
+                ))}
+              </>
+            )}
             <button
               className="secondary"
               disabled={busy}
@@ -960,9 +1220,12 @@ function JobView({
             <strong>{name(r.bindingId)}</strong>
             <p>{r.message}</p>
           </div>
-          {r.status === "conflict" && (
+          {(r.status === "conflict" ||
+            r.status === "compatibility-required") && (
             <button className="secondary" onClick={() => resolve(r)}>
-              버전 선택
+              {r.status === "compatibility-required"
+                ? "호환성 확인"
+                : "버전 선택"}
             </button>
           )}
         </div>

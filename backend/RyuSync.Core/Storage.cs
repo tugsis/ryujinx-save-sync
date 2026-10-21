@@ -92,9 +92,9 @@ public sealed class WebDavStore : IObjectStore
 }
 public sealed class RevisionRepository(IObjectStore store, AppSettings settings, string tempRoot)
 {
-    public string Prefix => "ryusync/" + settings.Workspace;
+    public string Prefix => (settings.ProtocolVersion == 2 ? "ryusync-v2/" : "ryusync/") + settings.Workspace;
     private string Base(string key) => Prefix + "/saves/" + key;
-    public string Scope => Hashing.Text(settings.WebDavUrl.TrimEnd('/') + "|" + settings.WebDavUser + "|" + settings.Workspace);
+    public string Scope => Hashing.Text(settings.WebDavUrl.TrimEnd('/') + "|" + settings.WebDavUser + "|" + settings.Workspace + (settings.ProtocolVersion == 2 ? "|payload-v2" : ""));
     public static bool IsId(string value) => Guid.TryParseExact(value, "N", out _);
     public async Task<List<Revision>> ReadAll(string key, CancellationToken ct)
     {
@@ -105,9 +105,11 @@ public sealed class RevisionRepository(IObjectStore store, AppSettings settings,
             if (!name.EndsWith(".json", StringComparison.Ordinal) || !IsId(name[..^5])) throw new UserError("원격 이력에 알 수 없는 파일이 있습니다.");
             var bytes = await store.Read(Base(key) + "/commits/" + name, 8 * 1024 * 1024, ct);
             Revision r; try { r = JsonSerializer.Deserialize<Revision>(bytes, JsonDefaults.Options) ?? throw new JsonException(); } catch (JsonException) { throw new UserError("미완료 또는 손상된 원격 버전입니다. 재시도 전에 서버를 확인하세요."); }
-            if (r.SchemaVersion != 1 || r.Id != name[..^5] || r.SaveKey != key || !IsId(r.Id) || r.Parents.Distinct().Count() != r.Parents.Length || r.Parents.Any(x => !IsId(x)) || !Snapshots.IsHash(r.ArchiveHash)) throw new UserError("원격 버전 형식이 올바르지 않습니다.");
+            if (r.SchemaVersion != settings.ProtocolVersion || r.PayloadVersion != settings.ProtocolVersion || r.SourceEmulator is not ("ryujinx" or "yuzu") || r.Id != name[..^5] || r.SaveKey != key || !IsId(r.Id) || r.Parents.Distinct().Count() != r.Parents.Length || r.Parents.Any(x => !IsId(x)) || !Snapshots.IsHash(r.ArchiveHash)) throw new UserError("원격 버전 형식이 올바르지 않습니다.");
             if (r.TitleId.Length != 16 || !r.TitleId.All(char.IsAsciiHexDigit) || Hashing.Text(r.TitleId.ToLowerInvariant() + ":" + r.Slot)[..32] != key) throw new UserError("게임 식별 정보가 일치하지 않습니다.");
-            Snapshots.ValidateTree(new(r.ContentHash, r.Files, r.Directories)); results.Add(r);
+            Snapshots.ValidateTree(new(r.ContentHash, r.Files, r.Directories));
+            if (settings.ProtocolVersion == 2) Snapshots.ValidatePayload(new(r.ContentHash, r.Files, r.Directories));
+            results.Add(r);
         }
         ValidateGraph(results); return results;
     }
@@ -126,13 +128,14 @@ public sealed class RevisionRepository(IObjectStore store, AppSettings settings,
         if (visited != rows.Count) throw new UserError("원격 버전 이력에 순환이 있습니다.");
     }
     public static Revision[] Heads(List<Revision> rows) { var parents = rows.SelectMany(x => x.Parents).ToHashSet(); return rows.Where(x => !parents.Contains(x.Id)).OrderBy(x => x.Id, StringComparer.Ordinal).ToArray(); }
-    public async Task<Revision> Publish(Binding binding, Snapshot snapshot, string[] parents, CancellationToken ct)
+    public async Task<Revision> Publish(Binding binding, Snapshot snapshot, string[] parents, CancellationToken ct, string? importedFromScope = null, string? importedFromRevisionId = null)
     {
+        if (settings.ProtocolVersion == 2) Snapshots.ValidatePayload(snapshot.Tree);
         var id = Guid.NewGuid().ToString("N"); var path = Base(binding.RemoteKey); await store.EnsureDirectory(path + "/objects", ct); await store.EnsureDirectory(path + "/commits", ct);
         await store.Upload(path + "/objects/" + id + ".zip", snapshot.ArchivePath, ct);
         Directory.CreateDirectory(tempRoot); var check = Path.Combine(tempRoot, id + ".verify");
         try { await store.Download(path + "/objects/" + id + ".zip", check, Snapshots.MaxBytes + 64 * 1024 * 1024, ct); if (Hashing.FileHash(check) != snapshot.ArchiveHash) throw new UserError("업로드한 스냅샷의 해시가 다릅니다."); } finally { if (File.Exists(check)) File.Delete(check); }
-        var row = new Revision { Id = id, Parents = parents.Distinct().ToArray(), SaveKey = binding.RemoteKey, TitleId = binding.TitleId, Title = binding.Title, Slot = binding.Slot, DeviceId = settings.DeviceId, DeviceName = settings.DeviceName, CreatedAt = DateTimeOffset.UtcNow, ContentHash = snapshot.Tree.Hash, ArchiveHash = snapshot.ArchiveHash, Files = snapshot.Tree.Files, Directories = snapshot.Tree.Directories };
+        var row = new Revision { ImportedFromScope = importedFromScope, ImportedFromRevisionId = importedFromRevisionId, SchemaVersion = settings.ProtocolVersion, PayloadVersion = settings.ProtocolVersion, SourceEmulator = binding.EmulatorKind, SourceBuild = binding.EmulatorBuild, GameVersion = binding.GameVersion, Id = id, Parents = parents.Distinct().ToArray(), SaveKey = binding.RemoteKey, TitleId = binding.TitleId, Title = binding.Title, Slot = binding.Slot, DeviceId = settings.DeviceId, DeviceName = settings.DeviceName, CreatedAt = DateTimeOffset.UtcNow, ContentHash = snapshot.Tree.Hash, ArchiveHash = snapshot.ArchiveHash, Files = snapshot.Tree.Files, Directories = snapshot.Tree.Directories };
         await store.Write(path + "/commits/" + id + ".json", JsonSerializer.SerializeToUtf8Bytes(row, JsonDefaults.Options), ct); return row;
     }
     public async Task<Snapshot> Fetch(Revision r, CancellationToken ct)

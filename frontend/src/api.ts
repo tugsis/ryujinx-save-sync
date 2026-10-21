@@ -1,4 +1,32 @@
+export interface Installation {
+  id: string;
+  name: string;
+  kind: "ryujinx" | "yuzu";
+  build: string;
+  dataRoot: string;
+  nandRoot: string;
+  executable: string;
+  workingDirectory: string;
+  arguments: string[];
+}
+export interface LaunchProfile {
+  id: string;
+  name: string;
+  installationId: string;
+  groupKeys: string[];
+  arguments: string[];
+}
+export interface RestoreReservation {
+  id: string;
+  installationId: string;
+  titleId: string;
+  slot: string;
+  revisionId: string;
+  scope: string;
+}
 export interface Settings {
+  protocolVersion: number;
+  installations: Installation[];
   deviceId: string;
   deviceName: string;
   dataRoot: string;
@@ -12,6 +40,8 @@ export interface Settings {
   syncAfterLaunch: boolean;
 }
 export interface Save {
+  installationId: string;
+  emulatorKind: string;
   id: string;
   titleId: string;
   title: string;
@@ -23,6 +53,10 @@ export interface Save {
   status: string;
 }
 export interface Binding {
+  installationId: string;
+  emulatorKind: string;
+  emulatorBuild: string;
+  gameVersion: string;
   id: string;
   titleId: string;
   title: string;
@@ -34,6 +68,9 @@ export interface Binding {
   remoteKey: string;
 }
 export interface Revision {
+  sourceEmulator: string;
+  sourceBuild: string;
+  gameVersion: string;
   id: string;
   saveKey: string;
   parents: string[];

@@ -1,5 +1,7 @@
 # Ryujinx Save Sync 기획서
 
+추가 기획: [Yuzu 동기화 지원 추가 계획](docs/PLAN-yuzu-support.md) — `v0.1.0-alpha.1` 이후의 확장 제안이며 현재 구현 상태와 구분한다.
+
 - 작성일: 2026-10-20
 - 상태: 구현 전 제안
 - 대상: Windows 11 x64, SteamOS x64에서 Ryujinx를 사용하는 개인 사용자

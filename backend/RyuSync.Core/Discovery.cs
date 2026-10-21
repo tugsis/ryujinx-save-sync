@@ -44,6 +44,7 @@ public static class Discovery
         var indexRoot = Path.Combine(root, "bis", "system", "save", "8000000000000000");
         var index = new[] { "0", "1" }.Select(x => Path.Combine(indexRoot, x, "imkvdb.arc")).FirstOrDefault(File.Exists);
         if (index is null) return new(root, saves, ["세이브 인덱스를 찾지 못했습니다. 설치본의 데이터 폴더를 확인하거나 게임을 한 번 실행하세요."]);
+        Emulators.EnsureInside(root, index);
         var before = File.ReadAllBytes(index); var entries = ReadIndex(before);
         foreach (var (attr, val) in entries)
         {
@@ -54,6 +55,7 @@ public static class Discovery
             var userBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in attr.UserId, 1));
             var userId = BinaryPrimitives.ReadUInt64LittleEndian(userBytes[8..]).ToString("x16") + BinaryPrimitives.ReadUInt64LittleEndian(userBytes).ToString("x16");
             var saveRoot = Path.Combine(root, "bis", "user", "save", saveId);
+            Emulators.EnsureInside(root, saveRoot, true);
             var content = Directory.Exists(Path.Combine(saveRoot, "0")) ? Path.Combine(saveRoot, "0") : Path.Combine(saveRoot, "1");
             var status = Directory.Exists(content) ? "ready" : "initialization-required";
             var name = title;

@@ -63,6 +63,20 @@ public sealed class StateDatabase : IDisposable
         while (reader.Read()) rows.Add(JsonSerializer.Deserialize<T>(reader.GetString(0), JsonDefaults.Options)!);
         return rows;
     }
+    public void ImportConfiguration(AppSettings settings, Binding[] bindings)
+    {
+        using var connection = Open(); using var transaction = connection.BeginTransaction();
+        void Write(string kind, string id, object value)
+        {
+            using var command = connection.CreateCommand(); command.Transaction = transaction;
+            command.CommandText = "INSERT INTO records VALUES($kind,$id,$json)";
+            command.Parameters.AddWithValue("$kind", kind); command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(value, value.GetType(), JsonDefaults.Options)); command.ExecuteNonQuery();
+        }
+        using (var command = connection.CreateCommand()) { command.Transaction = transaction; command.CommandText = "DELETE FROM records WHERE kind='settings' AND id='app'"; command.ExecuteNonQuery(); }
+        Write("settings", "app", settings); foreach (var binding in bindings) Write("binding", binding.Id, binding);
+        transaction.Commit();
+    }
     public void Delete(string kind, string id)
     {
         using var c = Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "DELETE FROM records WHERE kind=$kind AND id=$id";

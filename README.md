@@ -1,11 +1,14 @@
 # RyuSync
 
-Windows 11과 SteamOS에서 Ryujinx User Save를 WebDAV로 동기화하는 로컬 애플리케이션입니다. C#/.NET 백엔드가 파일·버전·작업을 관리하고, React 설정 페이지를 같은 로컬 서버에서 제공합니다.
+Windows 11과 SteamOS에서 Ryujinx·Yuzu User Save를 WebDAV로 동기화하는 로컬 애플리케이션입니다. C#/.NET 백엔드가 파일·버전·작업을 관리하고, React 설정 페이지를 같은 로컬 서버에서 제공합니다.
 
 **개발 초기 버전입니다.** Linux에서 합성 세이브와 테스트 WebDAV 서버를 사용한 자동 검증, 설정 화면 렌더링, Linux 실행 및 Windows 크로스 빌드를 확인했습니다. 실제 Windows·SteamOS의 Ryujinx와 NAS를 사용한 왕복 플레이 검증은 아직 수행하지 않았습니다. 아래 절차는 직접 확인하기 위한 사용·테스트 안내입니다.
 
+소스의 `0.2.0-alpha.1`부터 Yuzu 기본 Account Save, 여러 설치본·실행 프로필, 교차 동기화 시험 승인과 서버 복원 예약을 지원합니다. [Yuzu 설정·이전 버전 가져오기 안내](docs/yuzu.md)를 먼저 확인하세요. 기존 `v0.1.0-alpha.1` 릴리스에는 이 기능이 없습니다. 새 기본 상태 폴더와 원격 `ryusync-v2` 영역은 이전 버전과 분리됩니다.
+
 ## 목차
 
+- [Yuzu·교차 동기화 사용법](docs/yuzu.md)
 - [준비물과 배포 방식](#준비물과-배포-방식)
 - [Windows 11에서 빌드하고 테스트하기](#windows-11에서-빌드하고-테스트하기)
 - [SteamOS에서 사용하기](#steamos에서-사용하기)
@@ -240,7 +243,7 @@ cd "$HOME/Applications/RyuSync"
 5. 같은 사람의 두 기기에는 같은 프로필 연결 이름(예: `main`)을 사용해 게임을 등록합니다. 여러 사람이 있으면 `main`, `player2`처럼 구분하세요. 이 이름은 사용자가 확인하는 기기 간 대응 관계입니다.
 6. **전체 동기화** 또는 게임별 **지금 동기화**를 실행하고 작업 기록을 확인합니다.
 
-서버에는 `ryusync/<공간 이름>/saves/<게임·프로필 키>/` 아래에 버전별 아카이브와 Manifest가 생깁니다. UI에 등록한 User Save 내용만 전송하며 ROM·키·펌웨어·전체 데이터 루트를 업로드하지 않습니다.
+새 v2 설정의 서버에는 `ryusync-v2/<공간 이름>/saves/<게임·프로필 키>/` 아래에 버전별 아카이브와 Manifest가 생깁니다. UI에 등록한 User Save 내용만 전송하며 ROM·키·펌웨어·전체 데이터 루트를 업로드하지 않습니다.
 
 비밀번호는 **현재 백엔드 프로세스의 메모리에만** 보관합니다. 백엔드를 재시작하면 웹에서 다시 입력해야 합니다. 특히 재부팅 후 Steam에서 바로 실행하면 인증 미설정 때문에 실행 전 동기화가 보류될 수 있습니다. 먼저 `open`으로 설정 화면을 열고 비밀번호를 입력하세요.
 
@@ -345,8 +348,8 @@ Steam에서 플레이
 
 | OS | 기본 상태 폴더 |
 |---|---|
-| Windows | `%LOCALAPPDATA%\RyuSync` |
-| SteamOS | `$XDG_STATE_HOME/ryusync`, 미설정 시 `~/.local/state/ryusync` |
+| Windows | `%LOCALAPPDATA%\RyuSync-v2` |
+| SteamOS | `$XDG_STATE_HOME/ryusync-v2`, 미설정 시 `~/.local/state/ryusync-v2` |
 | 테스트·커스텀 | `--data-dir` 또는 `RYUSYNC_DATA_DIR`로 지정한 폴더 |
 
 상태 폴더에는 `state.db`, `backups`, `staging`, 로컬 접속 정보 등이 들어갑니다. 세이브 디렉터리 안에 상태 폴더를 두지 마세요. 같은 상태 폴더는 한 백엔드만 실행할 수 있고, 서로 다른 에이전트가 같은 Ryujinx 데이터를 동시에 관리하게 설정하면 안 됩니다.
@@ -409,6 +412,7 @@ Linux 개발 환경의 실제 HTTP·WebDAV·실행 전후 통합 테스트:
 
 ```sh
 python3 tests/integration.py
+python3 tests/yuzu_integration.py
 ```
 
 이 Python 테스트는 셸 기반 합성 실행 파일을 사용하므로 **Windows 네이티브 실행 대상으로 작성되지 않았습니다.** Windows에서는 .NET 테스트와 위의 실제 앱 확인 절차를 사용하세요. SteamOS에서 Python 테스트를 수행하려면 소스·Python·.NET SDK가 있는 개발 환경이 별도로 필요하며, 배포 폴더만 사용하면 실행할 수 없습니다.
@@ -418,11 +422,11 @@ GitHub Actions에는 Windows·Linux 빌드와 .NET 테스트, Linux Python 통�
 현재 남아 있는 항목:
 
 - Google Drive, OS 자격 증명 영구 저장, 주기적 자동 동기화, Gaming Mode 전용 컨트롤러 화면.
-- 실제 Windows·SteamOS의 Ryujinx·NAS 호환성 검증 및 분리 프로세스 실행 방식 지원.
+- 실제 Windows·SteamOS의 Ryujinx·Yuzu·게임별 교차 호환성 검증 및 AppImage·Flatpak 등 분리 프로세스 실행 방식 지원.
 - 자동 세이브 초기화와 오프라인 실행 선택.
 - 백업 복원 버튼과 저널 복구 UI. 현재는 [수동 복구 안내](docs/recovery.md)를 제공합니다.
 
-자동 탐색은 LibHac 0.19.0의 64바이트 키·값 인덱스 형식을 사용하며 알 수 없는 형식은 중지합니다. 백업·원격 이력 자동 정리도 아직 없습니다.
+Ryujinx 자동 탐색은 LibHac 0.19.0의 64바이트 키·값 인덱스 형식을 사용하며 알 수 없는 형식은 중지합니다. 백업·원격 이력 자동 정리도 아직 없습니다.
 
 ## 프로젝트 구조
 

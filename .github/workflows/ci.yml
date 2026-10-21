@@ -24,3 +24,5 @@ jobs:
       - run: dotnet test backend/RyuSync.Tests
       - if: runner.os == 'Linux'
         run: python3 tests/integration.py
+      - if: runner.os == 'Linux'
+        run: python3 tests/yuzu_integration.py

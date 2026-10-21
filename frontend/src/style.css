@@ -17,6 +17,7 @@ body {
 }
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -320,6 +321,7 @@ h3 {
   margin-top: 8px;
 }
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #dfe6df;
@@ -333,6 +335,7 @@ textarea {
   min-width: 0;
 }
 input:focus,
+select:focus,
 textarea:focus {
   border-color: #75a88a;
   box-shadow: 0 0 0 3px #edf6ef;
@@ -1020,4 +1023,14 @@ footer > small {
   .flow {
     font-size: 11px;
   }
+}
+
+.installation-editor {
+  border-bottom: 1px solid var(--border, #e3e8ed);
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+}
+.installation-editor .row-actions {
+  flex-wrap: wrap;
+  margin: 16px 0;
 }

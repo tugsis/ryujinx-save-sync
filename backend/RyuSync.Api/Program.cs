@@ -11,8 +11,8 @@ static string? Option(string[] args, string name)
     var i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
 }
 var root = Option(args, "--data-dir") ?? Environment.GetEnvironmentVariable("RYUSYNC_DATA_DIR") ??
-    (OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RyuSync") :
-    Path.Combine(Environment.GetEnvironmentVariable("XDG_STATE_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "state"), "ryusync"));
+    (OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RyuSync-v2") :
+    Path.Combine(Environment.GetEnvironmentVariable("XDG_STATE_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "state"), "ryusync-v2"));
 root = Path.GetFullPath(root);
 var command = args.FirstOrDefault() ?? "serve";
 if (command is "launch" or "open")
@@ -33,7 +33,9 @@ builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 1024 * 1024);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.Configure<JsonOptions>(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
-using var db = new StateDatabase(root); var snapshots = new Snapshots(db); var engine = new SyncEngine(db, snapshots); var coordinator = new Coordinator(db, snapshots, engine);
+using var db = new StateDatabase(root);
+if (db.Get<AppSettings>("settings", "app") is null) db.Settings = new AppSettings { ProtocolVersion = 2 };
+var snapshots = new Snapshots(db); var engine = new SyncEngine(db, snapshots); var coordinator = new Coordinator(db, snapshots, engine);
 var instanceSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); var clientSessions = new ConcurrentDictionary<string, byte>(); var tickets = new ConcurrentDictionary<string, DateTimeOffset>();
 string Ticket() { var t = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); tickets[t] = DateTimeOffset.UtcNow.AddMinutes(5); return t; }
 var url = $"http://127.0.0.1:{port}";
@@ -82,9 +84,24 @@ app.MapPut("/api/settings", async (AppSettings settings) => await coordinator.Sa
 app.MapPost("/api/storage/unlock", (CredentialRequest request) => { coordinator.Unlock(request.Password); return Results.Ok(new { unlocked = coordinator.HasCredential }); });
 app.MapPost("/api/storage/test", async () => { await coordinator.TestConnection(); return Results.Ok(new { message = "생성·업로드·다운로드·검증·삭제 테스트를 완료했습니다." }); });
 app.MapGet("/api/ryujinx/candidates", () => Discovery.Candidates());
-app.MapPost("/api/ryujinx/scan", () => { ProcessGuard.EnsureIdle(db.Settings); return Discovery.Scan(db.Settings.DataRoot); });
+app.MapPost("/api/ryujinx/scan", () => coordinator.Scan("legacy"));
+app.MapPost("/api/import/legacy", async (LegacyImportRequest request) => await coordinator.ImportLegacy(request.SourceRoot));
+app.MapGet("/api/import/legacy/catalog", async () => await coordinator.LegacyCatalog());
+app.MapPost("/api/import/legacy/revision", async (LegacyRevisionRequest request) => await coordinator.ImportLegacyRevision(request.BindingId, request.RevisionId));
+app.MapGet("/api/installations", () => Emulators.Installations(db.Settings));
+app.MapGet("/api/emulators/{kind}/candidates", (string kind, string? executable) => Emulators.Candidates(kind, executable ?? ""));
+app.MapPost("/api/installations/{id}/scan", (string id) => coordinator.Scan(id));
+app.MapGet("/api/launch-profiles", () => db.List<LaunchProfile>("launch-profile"));
+app.MapPut("/api/launch-profiles/{id}", async (string id, LaunchProfile profile) => await coordinator.SaveLaunchProfile(profile with { Id = id }));
+app.MapDelete("/api/launch-profiles/{id}", async (string id) => { await coordinator.DeleteLaunchProfile(id); return Results.NoContent(); });
+app.MapPost("/api/save-sets/{id}/compatibility", async (string id, CompatibilityRequest request) => await coordinator.ApproveCompatibility(id, request.State, request.ExpectedLocalHash, request.ExpectedHeads));
+app.MapGet("/api/restore-reservations", () => db.List<RestoreReservation>("restore-reservation"));
+app.MapPost("/api/restore-reservations", async (RestoreRequest request) => await coordinator.ReserveRestore(request.InstallationId, request.RevisionId));
+app.MapDelete("/api/restore-reservations/{id}", async (string id) => { await coordinator.CancelRestore(id); return Results.NoContent(); });
+app.MapPost("/api/save-sets/{id}/compare", async (string id) => await coordinator.CompareCompatibility(id));
+app.MapGet("/api/compatibility", () => db.List<CompatibilityApproval>("compatibility"));
 app.MapGet("/api/save-sets", () => db.List<Binding>("binding"));
-app.MapPost("/api/save-sets", async (RegisterRequest request) => await coordinator.Register(request.DiscoveryId, request.Slot));
+app.MapPost("/api/save-sets", async (RegisterRequest request) => await coordinator.Register(request.DiscoveryId, request.Slot, request.InstallationId ?? "legacy", request.GameVersion ?? "", request.RestoreReservationId));
 app.MapDelete("/api/save-sets/{id}", async (string id) => { await coordinator.RemoveBinding(id); return Results.NoContent(); });
 app.MapGet("/api/catalog", async () => await coordinator.Catalog());
 app.MapPost("/api/sync/jobs", (SyncRequest request) => Results.Accepted(value: coordinator.StartSync(request.BindingId)));
@@ -92,7 +109,7 @@ app.MapPost("/api/conflicts/{id}/resolve", (string id, Resolution request) => Re
 app.MapGet("/api/jobs", () => db.List<Job>("job").OrderByDescending(x => x.CreatedAt).Take(100));
 app.MapGet("/api/jobs/{id}", (string id) => db.Get<Job>("job", id) is Job job ? Results.Ok(job) : Results.NotFound());
 app.MapGet("/api/backups", () => db.List<Backup>("backup").OrderByDescending(x => x.CreatedAt));
-app.MapPost("/api/launch-sessions", () => Results.Accepted(value: coordinator.StartLaunch()));
+app.MapPost("/api/launch-sessions", (LaunchRequest request) => Results.Accepted(value: coordinator.StartLaunch(request.LaunchProfileId)));
 app.MapGet("/api/launch-sessions", () => db.List<LaunchSession>("launch").OrderByDescending(x => x.CreatedAt).Take(20));
 app.MapGet("/api/launch-sessions/{id}", (string id) => db.Get<LaunchSession>("launch", id) is LaunchSession s ? Results.Ok(s) : Results.NotFound());
 app.UseDefaultFiles(); app.UseStaticFiles(); app.MapFallbackToFile("index.html");
@@ -104,12 +121,23 @@ return 0;
 
 record SessionRequest(string Token);
 record CredentialRequest(string? Password);
-record RegisterRequest(string DiscoveryId, string Slot);
+record RegisterRequest(string DiscoveryId, string Slot, string? InstallationId = null, string? GameVersion = null, string? RestoreReservationId = null);
+record CompatibilityRequest(string State, string ExpectedLocalHash, string[] ExpectedHeads);
+record LaunchRequest(string? LaunchProfileId = null);
+record LegacyImportRequest(string SourceRoot);
+record LegacyRevisionRequest(string BindingId, string RevisionId);
+record RestoreRequest(string InstallationId, string RevisionId);
 record SyncRequest(string? BindingId);
 record InstanceInfo(string Url, string Token, int ProcessId);
 
 static class LauncherClient
 {
+    private static string? OptionValue(string[] args, string name)
+    {
+        var index = Array.IndexOf(args, name);
+        if (index >= 0 && (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))) throw new UserError("실행 프로필 ID를 지정하세요.");
+        return index >= 0 ? args[index + 1] : null;
+    }
     private static void OpenBrowser(string url)
     {
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { Console.WriteLine("브라우저에서 열기: " + url); }
@@ -146,7 +174,7 @@ static class LauncherClient
             var ticket = await client.PostAsJsonAsync(info.Url + "/api/ui-ticket", new { }); ticket.EnsureSuccessStatusCode();
             var ui = await ticket.Content.ReadFromJsonAsync<JsonElement>(); var browserUrl = ui.GetProperty("url").GetString()!;
             if (command == "open") { OpenBrowser(browserUrl); return 0; }
-            using var launched = await client.PostAsJsonAsync(info.Url + "/api/launch-sessions", new { });
+            using var launched = await client.PostAsJsonAsync(info.Url + "/api/launch-sessions", new { launchProfileId = OptionValue(args, "--launch-profile") });
             if (!launched.IsSuccessStatusCode) { Console.Error.WriteLine(await launched.Content.ReadAsStringAsync()); OpenBrowser(browserUrl); return 1; }
             var session = await launched.Content.ReadFromJsonAsync<LaunchSession>(JsonDefaults.Options) ?? throw new UserError("실행 세션 응답이 없습니다.");
             Console.WriteLine("실행 전 동기화 중…"); string previous = "";
