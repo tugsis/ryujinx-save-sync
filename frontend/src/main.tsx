@@ -50,6 +50,18 @@ function App() {
   const [reservations, setReservations] = useState<RestoreReservation[]>([]);
   const [scanId, setScanId] = useState("legacy");
   const [launchId, setLaunchId] = useState("");
+  const [titleEditor, setTitleEditor] = useState<{
+    titleId: string;
+    title: string;
+  } | null>(null);
+  const titleSource = (source?: string) =>
+    ({
+      "yuzu-cache": "Yuzu 캐시",
+      manual: "직접 지정",
+      server: "서버 목록",
+      emulator: "로컬 메타데이터",
+      "title-id": "게임 이름 미확인",
+    })[source ?? "title-id"] ?? "게임 이름 미확인";
   const [gameVersions, setGameVersions] = useState<Record<string, string>>({});
   const [found, setFound] = useState<Save[]>([]),
     [warnings, setWarnings] = useState<string[]>([]),
@@ -173,6 +185,37 @@ function App() {
     setWarnings(r.warnings);
     setPage("games");
     setNotice(`세이브 ${r.saves.length}개를 찾았습니다.`);
+  }
+  async function saveGameTitle(reset = false) {
+    if (!titleEditor) return;
+    const result = await api<{
+      titleId: string;
+      title: string;
+      source: string;
+    }>(
+      "/game-titles/" + titleEditor.titleId,
+      reset ? "DELETE" : "PUT",
+      reset ? undefined : { title: titleEditor.title },
+    );
+    setFound((current) =>
+      current.map((s) =>
+        s.titleId === result.titleId
+          ? { ...s, title: result.title, titleSource: result.source }
+          : s,
+      ),
+    );
+    setCatalog(
+      (current) =>
+        current?.map((r) =>
+          r.titleId === result.titleId ? { ...r, title: result.title } : r,
+        ) ?? null,
+    );
+    setTitleEditor(null);
+    setNotice(
+      reset
+        ? "게임 이름을 자동 표시로 되돌렸습니다."
+        : "게임 이름을 저장했습니다. 같은 Title ID의 목록에 적용됩니다.",
+    );
   }
   async function resolve(choice: string) {
     if (!conflict?.localHash || !conflict.heads) return;
@@ -759,6 +802,13 @@ function App() {
                   </button>
                 </div>
                 <div className="card-body">
+                  <p className="hint">
+                    게임 이름은 Yuzu의 게임 목록 캐시와 기존 등록 정보에서
+                    찾습니다. 이름이 없으면 Yuzu에서 게임 목록을 불러온 뒤
+                    종료하고 다시 탐색하거나 ‘게임 이름 수정’으로 지정하세요.
+                    서버 목록 조회로 다른 기기에서 등록한 이름도 가져올 수
+                    있습니다.
+                  </p>
                   <Field label="탐색·서버 복원 대상 설치본">
                     <select
                       value={scanId}
@@ -814,6 +864,19 @@ function App() {
                       <span className="game-icon">◇</span>
                       <div className="game-info">
                         <h3>{s.title}</h3>
+                        <small>{titleSource(s.titleSource)}</small>
+                        <button
+                          className="text-button"
+                          disabled={busy}
+                          onClick={() =>
+                            setTitleEditor({
+                              titleId: s.titleId,
+                              title: s.title === s.titleId ? "" : s.title,
+                            })
+                          }
+                        >
+                          게임 이름 수정
+                        </button>
                         <code>{s.titleId}</code>
                         <small>
                           {s.emulatorKind} · 프로필: {s.profileName}
@@ -911,6 +974,19 @@ function App() {
                     <div className="binding-row" key={b.id}>
                       <div>
                         <h3>{b.title}</h3>
+                        <small>{titleSource(b.titleSource)}</small>
+                        <button
+                          className="text-button"
+                          disabled={busy}
+                          onClick={() =>
+                            setTitleEditor({
+                              titleId: b.titleId,
+                              title: b.title === b.titleId ? "" : b.title,
+                            })
+                          }
+                        >
+                          게임 이름 수정
+                        </button>
                         <small>
                           {b.titleId} · {b.slot} · {b.emulatorKind}{" "}
                           {b.emulatorBuild} ·{" "}
@@ -1105,6 +1181,58 @@ function App() {
           </footer>
         </main>
       </div>
+      {titleEditor && (
+        <div className="modal-backdrop">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="game-name-title"
+            className="modal"
+          >
+            <h2 id="game-name-title">게임 이름 수정</h2>
+            <p>
+              <code>{titleEditor.titleId}</code>
+            </p>
+            <p>
+              이름은 이 기기의 같은 Title ID 목록에 적용됩니다. 세이브
+              경로·슬롯·버전 이력은 바뀌지 않습니다.
+            </p>
+            <Field label="게임 이름" requirement="필수">
+              <input
+                autoFocus
+                maxLength={200}
+                value={titleEditor.title}
+                onChange={(e) =>
+                  setTitleEditor({ ...titleEditor, title: e.target.value })
+                }
+                placeholder="게임 이름 입력"
+              />
+            </Field>
+            <div className="row-actions">
+              <button
+                disabled={busy || !titleEditor.title.trim()}
+                onClick={() => action(() => saveGameTitle())}
+              >
+                이름 저장
+              </button>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => action(() => saveGameTitle(true))}
+              >
+                자동 이름으로 되돌리기
+              </button>
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() => setTitleEditor(null)}
+              >
+                취소
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {conflict && (
         <div className="modal-backdrop">
           <section

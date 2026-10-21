@@ -1,4 +1,5 @@
 export interface Installation {
+  gameListCacheRoot?: string;
   id: string;
   name: string;
   kind: "ryujinx" | "yuzu";
@@ -40,6 +41,7 @@ export interface Settings {
   syncAfterLaunch: boolean;
 }
 export interface Save {
+  titleSource?: string;
   installationId: string;
   emulatorKind: string;
   id: string;
@@ -53,6 +55,7 @@ export interface Save {
   status: string;
 }
 export interface Binding {
+  titleSource?: string;
   installationId: string;
   emulatorKind: string;
   emulatorBuild: string;

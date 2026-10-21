@@ -67,7 +67,30 @@ public sealed class Coordinator
         var path = folder + "/" + Guid.NewGuid().ToString("N") + ".txt"; var bytes = System.Text.Encoding.UTF8.GetBytes("RyuSync connection test");
         await store.Write(path, bytes); try { if (!(await store.Read(path, 1024)).SequenceEqual(bytes)) throw new UserError("연결 테스트의 다운로드 내용이 다릅니다."); } finally { await store.Delete(path); }
     }
-    public async Task<Revision[]> Catalog() { using var store = Store(); return await Repository(store).Catalog(CancellationToken.None); }
+    public async Task<Revision[]> Catalog()
+    {
+        using var store = Store(); var rows = await Repository(store).Catalog(CancellationToken.None);
+        foreach (var row in rows) GameTitles.Remember(db, row.TitleId, row.Title, "server");
+        return rows.Select(row => row with { Title = GameTitles.Resolve(db, row.TitleId, row.Title, "server").Title }).ToArray();
+    }
+    private Binding DisplayBinding(Binding binding)
+    {
+        var name = GameTitles.Resolve(db, binding.TitleId, binding.Title, binding.TitleSource);
+        return binding with { Title = name.Title, TitleSource = name.Source };
+    }
+    public Binding[] Bindings() => db.List<Binding>("binding").Select(DisplayBinding).ToArray();
+    public async Task<GameTitle> SetGameTitle(string titleId, string? title)
+    {
+        titleId = GameTitles.NormalizeId(titleId);
+        if (title is not null) title = GameTitles.ValidateName(title);
+        await gate.WaitAsync(); try
+        {
+            if (title is null) db.Delete("game-title", titleId);
+            else db.Put("game-title", titleId, new GameTitle(titleId, title, "manual"));
+            return GameTitles.Resolve(db, titleId, db.List<Binding>("binding").FirstOrDefault(b => b.TitleId == titleId)?.Title ?? titleId);
+        }
+        finally { gate.Release(); }
+    }
     public async Task<Binding> Register(string discoveryId, string slot, string installationId = "legacy", string gameVersion = "", string? restoreReservationId = null)
     {
         await gate.WaitAsync(); try
@@ -77,7 +100,8 @@ public sealed class Coordinator
             ProcessGuard.EnsureIdle(db.Settings); var installation = Emulators.Installation(db.Settings, installationId); var save = Scan(installationId).Saves.SingleOrDefault(x => x.Id == discoveryId) ?? throw new UserError("다시 탐색한 뒤 게임을 선택하세요.");
             if (save.Status != "ready") throw new UserError("게임을 한 번 실행·저장·종료하고 다시 탐색하세요.");
             if (gameVersion.Length > 80) throw new UserError("게임 버전은 80자 이내로 입력하세요.");
-            var b = new Binding(save.Id, save.TitleId, save.Title, save.UserId, save.SaveDataId, save.SaveRoot, slot) { InstallationId = installationId, EmulatorKind = installation.Kind, EmulatorBuild = installation.Build, GameVersion = gameVersion };
+            var storedTitle = save.TitleSource == "manual" ? db.Get<GameTitle>("game-title-auto", save.TitleId)?.Title ?? save.TitleId : save.Title;
+            var b = new Binding(save.Id, save.TitleId, storedTitle, save.UserId, save.SaveDataId, save.SaveRoot, slot) { InstallationId = installationId, EmulatorKind = installation.Kind, EmulatorBuild = installation.Build, GameVersion = gameVersion, TitleSource = save.TitleSource == "manual" ? "emulator" : save.TitleSource };
             if (db.List<Binding>("binding").Any(x => x.Id == b.Id)) throw new UserError("이미 등록된 세이브입니다. 연결을 해제한 뒤 변경하세요.");
             foreach (var other in db.List<Binding>("binding"))
             {
@@ -97,7 +121,7 @@ public sealed class Coordinator
             else if (db.List<RestoreReservation>("restore-reservation").Any(r => r.InstallationId == installationId && r.TitleId == b.TitleId)) throw new UserError("이 게임은 서버 복원 예약이 있습니다. 예약을 선택해 연결하거나 예약을 해제하세요.");
             db.Put("binding", b.Id, b);
             if (reservation is not null) db.Delete("restore-reservation", reservation.Id);
-            return b;
+            return DisplayBinding(b);
         }
         finally { gate.Release(); }
     }
@@ -182,8 +206,13 @@ public sealed class Coordinator
     {
         ProcessGuard.EnsureIdle(db.Settings);
         var scan = Emulators.Scan(Emulators.Installation(db.Settings, installationId));
-        var names = db.List<Binding>("binding").GroupBy(b => b.TitleId).ToDictionary(g => g.Key, g => g.First().Title);
-        return scan with { Saves = scan.Saves.Select(s => s.Title == s.TitleId && names.TryGetValue(s.TitleId, out var name) ? s with { Title = name } : s).ToList() };
+        foreach (var binding in db.List<Binding>("binding")) GameTitles.Remember(db, binding.TitleId, binding.Title, "emulator");
+        foreach (var save in scan.Saves) GameTitles.Remember(db, save.TitleId, save.Title, save.TitleSource);
+        return scan with { Saves = scan.Saves.Select(s =>
+        {
+            var name = GameTitles.Resolve(db, s.TitleId, s.Title, s.TitleSource);
+            return s with { Title = name.Title, TitleSource = name.Source };
+        }).ToList() };
     }
     public async Task<LaunchProfile> SaveLaunchProfile(LaunchProfile profile)
     {
@@ -268,7 +297,7 @@ public sealed class Coordinator
             var rows = await remote.ReadAll(p.Binding.RemoteKey, ct);
             if (p.Parents.Any(parent => !rows.Any(x => x.Id == parent))) throw new UserError("미전송 버전의 부모 이력이 없습니다. 저장소를 확인하세요.");
             var existing = rows.FirstOrDefault(r => r.DeviceId == db.Settings.DeviceId && r.SourceEmulator == p.Binding.EmulatorKind && r.SourceBuild == p.Binding.EmulatorBuild && r.GameVersion == p.Binding.GameVersion && r.ContentHash == p.Snapshot.Tree.Hash && r.Parents.Order().SequenceEqual(p.Parents.Order()));
-            if (existing is null) await remote.Publish(p.Binding, p.Snapshot, p.Parents, ct);
+            if (existing is null) await remote.Publish(DisplayBinding(p.Binding), p.Snapshot, p.Parents, ct);
             db.Delete("pending", p.Id); Snapshots.CleanSnapshot(p.Snapshot);
         }
     }
@@ -278,7 +307,7 @@ public sealed class Coordinator
         try
         {
             ProcessGuard.EnsureIdle(db.Settings); if (db.List<ApplyJournal>("journal").Count > 0) throw new UserError("미완료 파일 적용을 먼저 복구하세요."); using var store = Store(); var remote = Repository(store); await ReplayPending(remote, CancellationToken.None);
-            var bindings = db.List<Binding>("binding").Where(x => x.Enabled && (bindingId is null || x.Id == bindingId) && (groupKeys is null || groupKeys.Contains(x.RemoteKey))).OrderBy(b => b.Id, StringComparer.Ordinal).ToArray();
+            var bindings = Bindings().Where(x => x.Enabled && (bindingId is null || x.Id == bindingId) && (groupKeys is null || groupKeys.Contains(x.RemoteKey))).OrderBy(b => b.Id, StringComparer.Ordinal).ToArray();
             if (bindings.Length == 0) throw new UserError("동기화할 게임을 먼저 등록하세요."); var results = new List<SyncOutcome>();
             foreach (var binding in bindings)
             {

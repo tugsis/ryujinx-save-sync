@@ -48,7 +48,9 @@ public sealed class YuzuAdapter : IEmulatorAdapter
                 var marker = Path.Combine(game, ".yuzu_save_size");
                 if (File.Exists(marker) && new FileInfo(marker).Length != 16) { warnings.Add($"{title}: .yuzu_save_size 형식이 달라 제외했습니다."); continue; }
                 var status = tree.Files.Count > 0 || File.Exists(marker) ? "ready" : "initialization-required";
-                saves.Add(new(Hashing.Text(game)[..32], title.ToUpperInvariant(), title.ToUpperInvariant(), uid.ToLowerInvariant(), uid, "account", game, game, status));
+                var name = GameTitles.YuzuCacheName(installation, title);
+                saves.Add(new(Hashing.Text(game)[..32], title.ToUpperInvariant(), name ?? title.ToUpperInvariant(), uid.ToLowerInvariant(), uid, "account", game, game, status)
+                    { TitleSource = name is null ? "title-id" : "yuzu-cache" });
             }
         }
         return new(root, saves, warnings);

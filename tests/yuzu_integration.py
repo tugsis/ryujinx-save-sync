@@ -80,8 +80,21 @@ def main():
             reservation = y.request('/restore-reservations', 'POST', {'installationId': installation['id'], 'revisionId': head['id']})
             assert not y.request('/installations/deck-yuzu/scan', 'POST', {})['saves']
             root = yuzu(nand, 'fresh initialization save')
+            name_cache = tmp / 'game-list-cache'
+            name_cache.mkdir()
+            (name_cache / (TITLE + '.appname.txt')).write_text('한글 게임 이름', encoding='utf-8')
+            settings = y.request('/settings')
+            settings['installations'][0]['gameListCacheRoot'] = str(name_cache)
+            y.request('/settings', 'PUT', settings)
             save = y.request('/installations/deck-yuzu/scan', 'POST', {})['saves'][0]
+            assert save['title'] == '한글 게임 이름' and save['titleSource'] == 'yuzu-cache'
             yb = y.request('/save-sets', 'POST', {'discoveryId': save['id'], 'slot': 'main', 'installationId': installation['id'], 'restoreReservationId': reservation['id']})
+            y.request('/game-titles/' + TITLE, 'PUT', {'title': '내 게임 이름'})
+            renamed = y.request('/save-sets')[0]
+            assert renamed['title'] == '내 게임 이름' and renamed['id'] == yb['id'] and renamed['remoteKey'] == yb['remoteKey']
+            assert yfile.read_text() == 'fresh initialization save'
+            y.request('/game-titles/' + TITLE, 'DELETE')
+            assert y.request('/save-sets')[0]['title'] == '한글 게임 이름'
             assert not y.request('/restore-reservations')
             result = y.sync()
             assert result['status'] == 'blocked', result

@@ -100,7 +100,9 @@ app.MapPost("/api/restore-reservations", async (RestoreRequest request) => await
 app.MapDelete("/api/restore-reservations/{id}", async (string id) => { await coordinator.CancelRestore(id); return Results.NoContent(); });
 app.MapPost("/api/save-sets/{id}/compare", async (string id) => await coordinator.CompareCompatibility(id));
 app.MapGet("/api/compatibility", () => db.List<CompatibilityApproval>("compatibility"));
-app.MapGet("/api/save-sets", () => db.List<Binding>("binding"));
+app.MapGet("/api/save-sets", () => coordinator.Bindings());
+app.MapPut("/api/game-titles/{titleId}", async (string titleId, GameTitleRequest request) => await coordinator.SetGameTitle(titleId, request.Title));
+app.MapDelete("/api/game-titles/{titleId}", async (string titleId) => await coordinator.SetGameTitle(titleId, null));
 app.MapPost("/api/save-sets", async (RegisterRequest request) => await coordinator.Register(request.DiscoveryId, request.Slot, request.InstallationId ?? "legacy", request.GameVersion ?? "", request.RestoreReservationId));
 app.MapDelete("/api/save-sets/{id}", async (string id) => { await coordinator.RemoveBinding(id); return Results.NoContent(); });
 app.MapGet("/api/catalog", async () => await coordinator.Catalog());
@@ -119,6 +121,7 @@ Console.WriteLine("접속 링크는 로컬 설정 권한을 포함합니다. 공
 await app.RunAsync();
 return 0;
 
+record GameTitleRequest(string Title);
 record SessionRequest(string Token);
 record CredentialRequest(string? Password);
 record RegisterRequest(string DiscoveryId, string Slot, string? InstallationId = null, string? GameVersion = null, string? RestoreReservationId = null);

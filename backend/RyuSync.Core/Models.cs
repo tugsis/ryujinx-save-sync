@@ -24,6 +24,7 @@ public record AppSettings
 public record DiscoveredSave(string Id, string TitleId, string Title, string UserId, string ProfileName,
     string SaveDataId, string SaveRoot, string ContentPath, string Status)
 {
+    public string TitleSource { get; init; } = "emulator";
     public string InstallationId { get; init; } = "legacy";
     public string EmulatorKind { get; init; } = "ryujinx";
 }
@@ -31,6 +32,7 @@ public record ScanResult(string DataRoot, List<DiscoveredSave> Saves, List<strin
 public record Binding(string Id, string TitleId, string Title, string UserId, string SaveDataId,
     string SaveRoot, string Slot = "main", bool Enabled = true)
 {
+    public string TitleSource { get; init; } = "emulator";
     public string InstallationId { get; init; } = "legacy";
     public string EmulatorKind { get; init; } = "ryujinx";
     public string EmulatorBuild { get; init; } = "";
@@ -80,6 +82,7 @@ public record LaunchSession(string Id, string Status, string Message, int? Proce
 }
 public record EmulatorInstallation
 {
+    public string GameListCacheRoot { get; init; } = "";
     public string Id { get; init; } = "";
     public string Name { get; init; } = "";
     public string Kind { get; init; } = "ryujinx";

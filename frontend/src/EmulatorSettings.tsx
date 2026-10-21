@@ -144,6 +144,25 @@ export function EmulatorSettings({
                     확인을 위해 입력을 권장합니다.
                   </small>
                 </label>
+                {i.kind === "yuzu" && (
+                  <label className="field">
+                    <span>
+                      게임 이름 캐시 폴더 <FieldRequirement value="선택" />
+                    </span>
+                    <input
+                      value={i.gameListCacheRoot ?? ""}
+                      onChange={(e) =>
+                        update(i.id, { gameListCacheRoot: e.target.value })
+                      }
+                      placeholder="자동으로 찾지 못할 때만 game_list 폴더 지정"
+                    />
+                    <small>
+                      기본적으로 데이터 루트/cache/game_list에서 게임 이름을
+                      읽습니다. 별도 캐시를 사용하면 해당 game_list 폴더를
+                      지정하세요. 세이브 탐색에는 필요하지 않습니다.
+                    </small>
+                  </label>
+                )}
                 <label className="field">
                   <span>
                     데이터 루트{" "}
