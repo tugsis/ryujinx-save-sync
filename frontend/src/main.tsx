@@ -14,9 +14,16 @@ import {
 } from "./api";
 import "./style.css";
 import { EmulatorSettings } from "./EmulatorSettings";
+import { CredentialSettings } from "./CredentialSettings";
 import { FieldRequirement } from "./FieldRequirement";
 import type { LaunchProfile, RestoreReservation } from "./api";
 const time = (value: string) => new Date(value).toLocaleString("ko-KR");
+function GameIcon({ url }: { url?: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  return <span className="game-icon">{url && !failed
+    ? <img src={url} alt="" onError={() => setFailed(true)} /> : "◇"}</span>;
+}
 const labels: Record<string, string> = {
   completed: "완료",
   failed: "실패",
@@ -54,9 +61,11 @@ function App() {
     titleId: string;
     title: string;
   } | null>(null);
+  const [titleLanguage, setTitleLanguage] = useState("ko");
   const titleSource = (source?: string) =>
     ({
       "yuzu-cache": "Yuzu 캐시",
+      web: "웹 게임 정보 · Nlib API",
       manual: "직접 지정",
       server: "서버 목록",
       emulator: "로컬 메타데이터",
@@ -68,8 +77,7 @@ function App() {
     [slots, setSlots] = useState<Record<string, string>>({}),
     [candidates, setCandidates] = useState<string[]>([]),
     [catalog, setCatalog] = useState<Revision[] | null>(null);
-  const [password, setPassword] = useState(""),
-    [argsText, setArgsText] = useState(""),
+  const [argsText, setArgsText] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
@@ -155,11 +163,7 @@ function App() {
     const saved = await api<Settings>("/settings", "PUT", next);
     setSettings(saved);
     setDirty(false);
-    if (password) {
-      await api("/storage/unlock", "POST", { password });
-      setPassword("");
-    }
-    setNotice("설정을 저장했습니다. 비밀번호는 이 실행 세션에서만 보관합니다.");
+    setNotice("설정을 저장했습니다. 비밀번호는 아래 인증 영역에서 별도로 적용하세요.");
   }
   async function sync(id?: string) {
     await api("/sync/jobs", "POST", { bindingId: id ?? null });
@@ -186,21 +190,22 @@ function App() {
     setPage("games");
     setNotice(`세이브 ${r.saves.length}개를 찾았습니다.`);
   }
-  async function saveGameTitle(reset = false) {
+  async function saveGameTitle(reset = false, fromWeb = false) {
     if (!titleEditor) return;
     const result = await api<{
       titleId: string;
       title: string;
       source: string;
+      thumbnailUrl?: string;
     }>(
-      "/game-titles/" + titleEditor.titleId,
-      reset ? "DELETE" : "PUT",
-      reset ? undefined : { title: titleEditor.title },
+      "/game-titles/" + titleEditor.titleId + (fromWeb ? "/web" : ""),
+      fromWeb ? "POST" : reset ? "DELETE" : "PUT",
+      fromWeb ? { language: titleLanguage } : reset ? undefined : { title: titleEditor.title },
     );
     setFound((current) =>
       current.map((s) =>
         s.titleId === result.titleId
-          ? { ...s, title: result.title, titleSource: result.source }
+          ? { ...s, title: result.title, titleSource: result.source, thumbnailUrl: result.thumbnailUrl }
           : s,
       ),
     );
@@ -212,7 +217,9 @@ function App() {
     );
     setTitleEditor(null);
     setNotice(
-      reset
+      fromWeb
+        ? `웹 게임 정보를 저장했습니다.${result.thumbnailUrl ? " 썸네일도 받았습니다." : " 제공되는 썸네일이 없습니다."}${result.source === "manual" ? " 직접 지정한 이름은 유지됩니다. 자동 이름으로 되돌리면 웹 이름을 표시합니다." : ""}`
+        : reset
         ? "게임 이름을 자동 표시로 되돌렸습니다."
         : "게임 이름을 저장했습니다. 같은 Title ID의 목록에 적용됩니다.",
     );
@@ -424,22 +431,7 @@ function App() {
                           onChange={(e) => change("webDavUser", e.target.value)}
                         />
                       </Field>
-                      <Field
-                        label="비밀번호 · 실행 종료 시 삭제"
-                        requirement="잠금 해제 시 필수"
-                      >
-                        <input
-                          type="password"
-                          autoComplete="off"
-                          value={password}
-                          placeholder={
-                            status?.credentialUnlocked
-                              ? "연결 잠금 해제됨"
-                              : "앱 비밀번호 입력"
-                          }
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                      </Field>
+
                     </div>
                     <Field label="동기화 공간 이름" requirement="필수">
                       <input
@@ -476,10 +468,9 @@ function App() {
                       </span>
                       <button
                         className="secondary"
-                        disabled={busy}
+                        disabled={busy || dirty || !status?.credentialUnlocked}
                         onClick={() =>
                           action(async () => {
-                            await save();
                             await api("/storage/test", "POST", {});
                             setNotice(
                               "실제 WebDAV 연결 테스트를 완료했습니다.",
@@ -487,13 +478,11 @@ function App() {
                           })
                         }
                       >
-                        저장 후 연결 테스트 →
+                        현재 인증으로 연결 테스트 →
                       </button>
                     </div>
-                    <p className="hint">
-                      비밀번호는 디스크에 저장하지 않습니다. OS 자격 증명 저장
-                      기능은 후속 단계입니다.
-                    </p>
+                    <CredentialSettings busy={busy} dirty={dirty} playing={!!status?.launch}
+                      run={action} saveSettings={save} notify={setNotice} />
                   </div>
                 </section>
                 <section className="card">
@@ -805,7 +794,8 @@ function App() {
                   <p className="hint">
                     게임 이름은 Yuzu의 게임 목록 캐시와 기존 등록 정보에서
                     찾습니다. 이름이 없으면 Yuzu에서 게임 목록을 불러온 뒤
-                    종료하고 다시 탐색하거나 ‘게임 이름 수정’으로 지정하세요.
+                    종료하고 다시 탐색하거나 ‘이름·썸네일 설정’에서 웹으로
+                    가져오거나 직접 지정하세요.
                     서버 목록 조회로 다른 기기에서 등록한 이름도 가져올 수
                     있습니다.
                   </p>
@@ -861,7 +851,7 @@ function App() {
                   )}
                   {found.map((s) => (
                     <div className="game-row" key={s.id}>
-                      <span className="game-icon">◇</span>
+                      <GameIcon url={s.thumbnailUrl} />
                       <div className="game-info">
                         <h3>{s.title}</h3>
                         <small>{titleSource(s.titleSource)}</small>
@@ -875,7 +865,7 @@ function App() {
                             })
                           }
                         >
-                          게임 이름 수정
+                          이름·썸네일 설정
                         </button>
                         <code>{s.titleId}</code>
                         <small>
@@ -972,7 +962,8 @@ function App() {
                 <div className="card-body">
                   {bindings.map((b) => (
                     <div className="binding-row" key={b.id}>
-                      <div>
+                      <div className="binding-details">
+                        <GameIcon url={b.thumbnailUrl} />
                         <h3>{b.title}</h3>
                         <small>{titleSource(b.titleSource)}</small>
                         <button
@@ -985,7 +976,7 @@ function App() {
                             })
                           }
                         >
-                          게임 이름 수정
+                          이름·썸네일 설정
                         </button>
                         <small>
                           {b.titleId} · {b.slot} · {b.emulatorKind}{" "}
@@ -1189,7 +1180,8 @@ function App() {
             aria-labelledby="game-name-title"
             className="modal"
           >
-            <h2 id="game-name-title">게임 이름 수정</h2>
+            <h2 id="game-name-title">게임 이름·썸네일 설정</h2>
+            {(busy || notice) && <p role="status">{busy ? "처리 중입니다…" : notice}</p>}
             <p>
               <code>{titleEditor.titleId}</code>
             </p>
@@ -1197,6 +1189,16 @@ function App() {
               이름은 이 기기의 같은 Title ID 목록에 적용됩니다. 세이브
               경로·슬롯·버전 이력은 바뀌지 않습니다.
             </p>
+            <div className="web-game-info">
+              <p>버튼을 누르면 Title ID를 <a href="https://github.com/ghost-land/Nlib-API" target="_blank" rel="noreferrer">Nlib API</a>에 전송해 이름과 썸네일을 가져옵니다. 받은 정보는 이 기기에 저장되며, 직접 지정한 이름은 유지됩니다.</p>
+              <Field label="웹 게임 이름 언어" requirement="선택">
+                <select value={titleLanguage} disabled={busy} onChange={(e) => setTitleLanguage(e.target.value)}>
+                  <option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option>
+                </select>
+              </Field>
+              <button disabled={busy} onClick={() => action(() => saveGameTitle(false, true))}>웹에서 이름·썸네일 가져오기</button>
+              <small>게임·언어에 따라 다른 언어의 이름이 표시되거나 조회 결과·이미지가 없을 수 있습니다. 다시 누르면 정보를 갱신합니다.</small>
+            </div>
             <Field label="게임 이름" requirement="필수">
               <input
                 autoFocus

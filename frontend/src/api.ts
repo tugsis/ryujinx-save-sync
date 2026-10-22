@@ -41,6 +41,7 @@ export interface Settings {
   syncAfterLaunch: boolean;
 }
 export interface Save {
+  thumbnailUrl?: string;
   titleSource?: string;
   installationId: string;
   emulatorKind: string;
@@ -55,6 +56,7 @@ export interface Save {
   status: string;
 }
 export interface Binding {
+  thumbnailUrl?: string;
   titleSource?: string;
   installationId: string;
   emulatorKind: string;

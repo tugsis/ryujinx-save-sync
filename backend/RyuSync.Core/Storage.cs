@@ -20,18 +20,32 @@ public sealed class WebDavStore : IObjectStore
 {
     private readonly HttpClient client;
     private readonly Uri root;
-    public WebDavStore(AppSettings settings, string password)
+    private readonly Action<int>? report;
+    private bool authenticationRejected;
+    public WebDavStore(AppSettings settings, string password, Action<int>? report = null)
     {
+        this.report = report;
         if (!Uri.TryCreate(settings.WebDavUrl.TrimEnd('/') + "/", UriKind.Absolute, out var uri) ||
            uri.Scheme is not ("https" or "http") || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0) throw new UserError("유효한 WebDAV URL을 입력하세요. 계정은 주소에 포함하지 마세요.");
         if (uri.Scheme == "http" && !settings.AllowInsecureHttp) throw new UserError("HTTP 연결은 허용 설정이 필요합니다. HTTPS 사용을 권장합니다.");
         root = uri; client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(3) };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(settings.WebDavUser + ":" + password)));
     }
-    private Uri Url(string path) => new(root, string.Join('/', path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString)) + (path.EndsWith('/') ? "/" : ""));
-    private static void Check(HttpResponseMessage response)
+    private Uri Url(string path)
     {
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) throw new UserError("WebDAV 인증 또는 권한을 확인하세요.");
+        if (authenticationRejected) throw new UserError("WebDAV 인증이 거부되었습니다. 비밀번호를 다시 확인하세요.");
+        return new(root, string.Join('/', path.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString)) + (path.EndsWith('/') ? "/" : ""));
+    }
+    private void Check(HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            authenticationRejected = true; report?.Invoke(401); throw new UserError("WebDAV 인증이 거부되었습니다 (401). 비밀번호를 다시 입력하세요.");
+        }
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            report?.Invoke(403); throw new UserError("WebDAV 접근이 거부되었습니다 (403). 계정의 폴더 권한과 서버 정책을 확인하세요.");
+        }
         if (!response.IsSuccessStatusCode) throw new UserError($"WebDAV 요청 실패: HTTP {(int)response.StatusCode}. 리디렉션 주소라면 최종 WebDAV 주소를 입력하세요.");
     }
     public async Task EnsureDirectory(string path, CancellationToken ct = default)

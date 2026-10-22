@@ -35,6 +35,11 @@ jobs:
         run: python3 tests/integration.py
       - if: runner.os == 'Linux'
         run: python3 tests/yuzu_integration.py
+      - if: runner.os == 'Linux'
+        name: Install isolated credential test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0 gnome-keyring dbus libglib2.0-bin
+      - if: runner.os == 'Linux'
+        run: python3 tests/credentials_integration.py
       - name: Publish self-contained application
         env:
           RID: ${{ matrix.rid }}

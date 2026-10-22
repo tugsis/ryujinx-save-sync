@@ -24,6 +24,7 @@ public record AppSettings
 public record DiscoveredSave(string Id, string TitleId, string Title, string UserId, string ProfileName,
     string SaveDataId, string SaveRoot, string ContentPath, string Status)
 {
+    public string? ThumbnailUrl { get; init; }
     public string TitleSource { get; init; } = "emulator";
     public string InstallationId { get; init; } = "legacy";
     public string EmulatorKind { get; init; } = "ryujinx";
@@ -32,6 +33,7 @@ public record ScanResult(string DataRoot, List<DiscoveredSave> Saves, List<strin
 public record Binding(string Id, string TitleId, string Title, string UserId, string SaveDataId,
     string SaveRoot, string Slot = "main", bool Enabled = true)
 {
+    public string? ThumbnailUrl { get; init; }
     public string TitleSource { get; init; } = "emulator";
     public string InstallationId { get; init; } = "legacy";
     public string EmulatorKind { get; init; } = "ryujinx";

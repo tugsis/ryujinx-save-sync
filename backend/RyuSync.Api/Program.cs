@@ -36,6 +36,9 @@ builder.Services.Configure<JsonOptions>(o => o.SerializerOptions.PropertyNamingP
 using var db = new StateDatabase(root);
 if (db.Get<AppSettings>("settings", "app") is null) db.Settings = new AppSettings { ProtocolVersion = 2 };
 var snapshots = new Snapshots(db); var engine = new SyncEngine(db, snapshots); var coordinator = new Coordinator(db, snapshots, engine);
+await coordinator.InitializeCredentials();
+using var metadataHttp = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+var metadata = new WebGameMetadata(metadataHttp);
 var instanceSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); var clientSessions = new ConcurrentDictionary<string, byte>(); var tickets = new ConcurrentDictionary<string, DateTimeOffset>();
 string Ticket() { var t = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)); tickets[t] = DateTimeOffset.UtcNow.AddMinutes(5); return t; }
 var url = $"http://127.0.0.1:{port}";
@@ -82,6 +85,14 @@ app.MapGet("/api/status", () => new { version = appVersion, device = db.Settings
 app.MapGet("/api/settings", () => db.Settings);
 app.MapPut("/api/settings", async (AppSettings settings) => await coordinator.SaveSettings(settings));
 app.MapPost("/api/storage/unlock", (CredentialRequest request) => { coordinator.Unlock(request.Password); return Results.Ok(new { unlocked = coordinator.HasCredential }); });
+app.MapGet("/api/storage/credential", () => coordinator.CredentialStatus());
+app.MapPost("/api/storage/credential/probe", async () => await coordinator.ProbeCredentials());
+app.MapPut("/api/storage/credential", async (SaveCredentialRequest request) => await coordinator.ApplyCredential(request.Password, request.Persist, request.ExpectedConnectionId));
+app.MapPost("/api/storage/credential/unlock", async (CredentialConnectionRequest request) => await coordinator.UseSavedCredential(request.ExpectedConnectionId));
+app.MapPost("/api/storage/credential/lock", () => coordinator.LockCredential());
+app.MapDelete("/api/storage/credential", async (HttpRequest request) => await coordinator.DeleteCredential(request.Query["connectionId"].ToString()));
+app.MapGet("/api/storage/credential/retired", () => coordinator.RetiredCredentials());
+app.MapDelete("/api/storage/credential/retired/{id}", async (string id, HttpRequest request) => await coordinator.DeleteCredential(request.Query["connectionId"].ToString(), id));
 app.MapPost("/api/storage/test", async () => { await coordinator.TestConnection(); return Results.Ok(new { message = "생성·업로드·다운로드·검증·삭제 테스트를 완료했습니다." }); });
 app.MapGet("/api/ryujinx/candidates", () => Discovery.Candidates());
 app.MapPost("/api/ryujinx/scan", () => coordinator.Scan("legacy"));
@@ -103,6 +114,11 @@ app.MapGet("/api/compatibility", () => db.List<CompatibilityApproval>("compatibi
 app.MapGet("/api/save-sets", () => coordinator.Bindings());
 app.MapPut("/api/game-titles/{titleId}", async (string titleId, GameTitleRequest request) => await coordinator.SetGameTitle(titleId, request.Title));
 app.MapDelete("/api/game-titles/{titleId}", async (string titleId) => await coordinator.SetGameTitle(titleId, null));
+app.MapPost("/api/game-titles/{titleId}/web", async (string titleId, WebGameRequest request, CancellationToken ct) =>
+    await coordinator.SaveWebGameInfo(await metadata.Fetch(titleId, request.Language, ct)));
+app.MapGet("/api/game-titles/{titleId}/thumbnail", (string titleId) =>
+    db.Get<WebGameInfo>("game-web", GameTitles.NormalizeId(titleId))?.IconBase64 is string image
+        ? Results.File(Convert.FromBase64String(image), "image/jpeg") : Results.NotFound());
 app.MapPost("/api/save-sets", async (RegisterRequest request) => await coordinator.Register(request.DiscoveryId, request.Slot, request.InstallationId ?? "legacy", request.GameVersion ?? "", request.RestoreReservationId));
 app.MapDelete("/api/save-sets/{id}", async (string id) => { await coordinator.RemoveBinding(id); return Results.NoContent(); });
 app.MapGet("/api/catalog", async () => await coordinator.Catalog());
@@ -122,8 +138,11 @@ await app.RunAsync();
 return 0;
 
 record GameTitleRequest(string Title);
+record WebGameRequest(string Language = "ko");
 record SessionRequest(string Token);
 record CredentialRequest(string? Password);
+record SaveCredentialRequest(string Password, bool Persist, string ExpectedConnectionId);
+record CredentialConnectionRequest(string ExpectedConnectionId);
 record RegisterRequest(string DiscoveryId, string Slot, string? InstallationId = null, string? GameVersion = null, string? RestoreReservationId = null);
 record CompatibilityRequest(string State, string ExpectedLocalHash, string[] ExpectedHeads);
 record LaunchRequest(string? LaunchProfileId = null);

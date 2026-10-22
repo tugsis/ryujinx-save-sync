@@ -2,7 +2,10 @@ using System.Text;
 using System.Text.RegularExpressions;
 namespace RyuSync;
 
-public record GameTitle(string TitleId, string Title, string Source);
+public record GameTitle(string TitleId, string Title, string Source)
+{
+    public string? ThumbnailUrl { get; init; }
+}
 public static class GameTitles
 {
     public static string NormalizeId(string id)
@@ -16,7 +19,7 @@ public static class GameTitles
         if (title.Length is < 1 or > 200 || title.Any(char.IsControl)) throw new UserError("게임 이름은 제어 문자 없이 1~200자로 입력하세요.");
         return title;
     }
-    private static int Priority(string source) => source switch { "yuzu-cache" => 90, "emulator" => 80, "server" => 50, _ => 0 };
+    private static int Priority(string source) => source switch { "web" => 95, "yuzu-cache" => 90, "emulator" => 80, "server" => 50, _ => 0 };
     public static void Remember(StateDatabase db, string id, string title, string source)
     {
         id = NormalizeId(id);
@@ -27,6 +30,12 @@ public static class GameTitles
             if (previous is null || previous.Title != title || previous.Source != source) db.Put("game-title-auto", id, new GameTitle(id, title, source));
     }
     public static GameTitle Resolve(StateDatabase db, string id, string fallback, string source = "emulator")
+    {
+        var result = ResolveName(db, id, fallback, source);
+        var image = db.Get<WebGameInfo>("game-web", result.TitleId);
+        return result with { ThumbnailUrl = image?.IconBase64 is null ? null : $"/api/game-titles/{result.TitleId}/thumbnail?v={image.FetchedAt.UtcTicks}" };
+    }
+    private static GameTitle ResolveName(StateDatabase db, string id, string fallback, string source)
     {
         id = NormalizeId(id);
         var manual = db.Get<GameTitle>("game-title", id);

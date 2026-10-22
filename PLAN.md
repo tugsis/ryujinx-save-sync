@@ -2,8 +2,10 @@
 
 추가 기획: [Yuzu 동기화 지원 추가 계획](docs/PLAN-yuzu-support.md) — `v0.1.0-alpha.1` 이후의 확장 제안이며 현재 구현 상태와 구분한다.
 
+구현 및 검증 기획: [WebDAV 비밀번호 저장 계획](docs/PLAN-credential-storage.md) — OS 보관함·설정 화면 구현 완료. Windows·SteamOS 실기기 검증 항목을 포함한다.
+
 - 작성일: 2026-10-20
-- 상태: 구현 전 제안
+- 상태: 최종 목표 기획. 일부 기능 구현됨. 현재 상태는 [구현 현황](docs/implementation-status.md), 비밀번호 저장의 남은 환경 검증은 [비밀번호 저장 계획](docs/PLAN-credential-storage.md)을 따른다.
 - 대상: Windows 11 x64, SteamOS x64에서 Ryujinx를 사용하는 개인 사용자
 - 목표: 두 기기의 User Save를 WebDAV 또는 Google Drive로 동기화하고 웹페이지에서 설정·상태 확인·충돌 해결·복원을 수행한다.
 
@@ -207,6 +209,8 @@ flowchart LR
 
 세이브 발견 어댑터가 해당 Ryujinx 빌드의 LibHac API와 인덱스를 **읽기만** 할 수 있는지 0단계에서 먼저 실증한다. 가능하면 .NET 백엔드에 어댑터로 넣고, 실패하면 해당 빌드에 맞는 인덱스 리더를 구현하되 무근거한 폴더 추측으로 대체하지 않는다. 라이브러리 버전과 SQLite 드라이버는 구현 착수 시 유지보수 상태·라이선스·양 OS 빌드를 확인하여 고정한다. SteamOS에서 Secret Service가 제공되지 않거나 Gaming Mode에서 잠겨 있는 경우를 검증한다. 대안은 사용자가 입력하는 암호로 보호한 저장소이며, 잠금 해제 전에는 자동 동기화를 중지한다. 복호화 키를 암호문 옆에 저장하는 방식은 사용하지 않는다.
 
+비밀번호 저장의 우선 구현은 OS 보관함을 사용하고, 이용할 수 없는 환경에서는 세션 입력을 유지한다. 사용자가 입력한 마스터 암호로 보호하는 대체 보관함은 후속 단계로 둔다. 상세 범위와 구현 순서는 [WebDAV 비밀번호 저장 계획](docs/PLAN-credential-storage.md)을 우선 적용한다.
+
 ## 6. 백엔드 모듈
 
 - **설정 관리:** 기기 이름, 설치본, 저장소, 게임 경로, 동기화 정책.
@@ -376,6 +380,11 @@ API 초안:
 | `GET /api/settings` | 비밀값을 제외한 설정 |
 | `PUT /api/settings` | 설정 수정·검증 |
 | `POST /api/storage/test` | 저장소 연결 테스트 |
+| `GET /api/storage/credential` | 저장 방식·사용 가능 여부·잠금·인증 상태 조회, 비밀번호 반환 없음 |
+| `PUT /api/storage/credential` | 현재 연결에 대해 검증한 비밀번호를 세션 또는 OS 보관함에 저장 |
+| `POST /api/storage/credential/unlock` | 저장된 인증 정보 재조회 및 필요한 OS 잠금 해제 |
+| `POST /api/storage/credential/lock` | 현재 앱 세션의 인증 사용 중지 |
+| `DELETE /api/storage/credential` | 현재 연결의 저장된 비밀번호 삭제 및 앱 세션 잠금 |
 | `POST /api/auth/google/start` | OAuth 시작 |
 | `GET /api/auth/google/callback` | OAuth 콜백 |
 | `POST /api/ryujinx/scan` | 설치본·게임·계정·User Save 자동 발견 |
@@ -430,6 +439,10 @@ API 초안:
 - Gaming Mode에서는 MVP 런처를 Steam 비 Steam 게임 바로가기에 연결하고, 시작 전·종료 후 동기화와 오류 선택 UI를 검증한다.
 
 ## 13. 개발 단계와 완료 기준
+
+### WebDAV 비밀번호 저장: 구현 완료, 실기기 검증 남음
+
+Windows Credential Manager와 Linux Secret Service 어댑터, 인증 상태 API, 저장·삭제·잠금 웹 설정을 구현했다. Linux 격리 보관함의 저장·재시작·잠금·삭제와 브라우저 동작을 검증했다. Windows 로그인 세션, SteamOS Desktop/Gaming Mode와 절전 복귀는 실제 기기에서 확인해야 한다. 보관함이 없거나 잠긴 경우에는 구체적인 안내와 세션 입력을 제공하며 평문 파일로 대체하지 않는다. [상세 범위·완료 기준](docs/PLAN-credential-storage.md#8-구현-순서와-완료-기준)을 따른다.
 
 ### 0단계: 호환성 실험
 

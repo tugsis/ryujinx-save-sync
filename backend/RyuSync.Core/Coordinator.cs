@@ -8,21 +8,63 @@ public sealed class Coordinator
     private readonly Snapshots snapshots;
     private readonly SyncEngine engine;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private string? password;
+    private readonly Credentials credentials;
     private readonly object launchLock = new();
     private Task? launchTask;
-    public Coordinator(StateDatabase db, Snapshots snapshots, SyncEngine engine)
+    public Coordinator(StateDatabase db, Snapshots snapshots, SyncEngine engine, Credentials? credentials = null)
     {
         this.db = db; this.snapshots = snapshots; this.engine = engine;
-        password = Environment.GetEnvironmentVariable("RYUSYNC_WEBDAV_PASSWORD");
+        this.credentials = credentials ?? new Credentials(db, CredentialStores.Create(), Environment.GetEnvironmentVariable("RYUSYNC_WEBDAV_PASSWORD"));
         snapshots.Recover();
         foreach (var job in db.List<Job>("job").Where(j => j.Status is "running" or "queued" || j.Status == "waiting" && ActiveLaunch is null))
         {
             db.Put("job", job.Id, job with { Status = "interrupted", Message = "프로그램이 종료되어 작업이 중단되었습니다. 다시 동기화해 주세요." }); db.Delete("sync-request", job.Id);
         }
     }
-    public bool HasCredential => password is not null;
-    public void Unlock(string? value) { password = value; }
+    public bool HasCredential => credentials.Status().Ready;
+    public CredentialStatus CredentialStatus() => credentials.Status();
+    public RetiredCredential[] RetiredCredentials() => credentials.Retired();
+    public Task InitializeCredentials() => credentials.Initialize();
+    public async Task<CredentialStatus> ProbeCredentials()
+    {
+        EnterCredentialChange(); try { await credentials.Probe(); return credentials.Status(); } finally { gate.Release(); }
+    }
+    private void EnterCredentialChange()
+    {
+        if (!gate.Wait(0)) throw new UserError("동기화 또는 설정 작업이 진행 중입니다. 완료 후 인증을 변경하세요.");
+        if (ActiveLaunch is not null) { gate.Release(); throw new UserError("게임 실행 세션이 끝난 뒤 인증을 변경하세요."); }
+    }
+    public void Unlock(string? value)
+    {
+        EnterCredentialChange(); try { credentials.UseSession(value); } finally { gate.Release(); }
+    }
+    public async Task<CredentialStatus> ApplyCredential(string password, bool persist, string expectedConnectionId)
+    {
+        EnterCredentialChange(); try
+        {
+            credentials.Expect(expectedConnectionId); Credentials.ValidatePassword(password);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var candidate = new WebDavStore(db.Settings, password);
+            await TestConnectionCore(candidate, timeout.Token);
+            await credentials.Apply(password, persist, expectedConnectionId);
+            return credentials.Status();
+        }
+        finally { gate.Release(); }
+    }
+    public async Task<CredentialStatus> UseSavedCredential(string expectedConnectionId)
+    {
+        EnterCredentialChange(); try { await credentials.Unlock(expectedConnectionId); return credentials.Status(); }
+        finally { gate.Release(); }
+    }
+    public CredentialStatus LockCredential()
+    {
+        EnterCredentialChange(); try { credentials.Lock(); return credentials.Status(); } finally { gate.Release(); }
+    }
+    public async Task<CredentialStatus> DeleteCredential(string expectedConnectionId, string? retiredId = null)
+    {
+        EnterCredentialChange(); try { await credentials.Delete(expectedConnectionId, retiredId); return credentials.Status(); }
+        finally { gate.Release(); }
+    }
     public static void ValidateSettings(AppSettings s)
     {
         if (s.DeviceName.Trim().Length is < 1 or > 60) throw new UserError("기기 이름은 1~60자로 입력하세요.");
@@ -54,31 +96,65 @@ public sealed class Coordinator
             }
             foreach (var profile in db.List<LaunchProfile>("launch-profile")) _ = Emulators.Installation(value, profile.InstallationId);
             if (old.DataRoot != value.DataRoot && db.List<Binding>("binding").Any(b => b.InstallationId == "legacy")) throw new UserError("데이터 폴더 변경 전에 등록된 게임의 동기화를 해제하세요.");
-            if (old.WebDavUrl != value.WebDavUrl || old.WebDavUser != value.WebDavUser) password = null;
-            value = value with { DeviceId = old.DeviceId }; db.Settings = value; return value;
+            _ = Credentials.ConnectionId(value);
+            value = value with { DeviceId = old.DeviceId }; db.Settings = value; credentials.ChangeConnection(value); return value;
         }
         finally { gate.Release(); }
     }
-    private IObjectStore Store() => new WebDavStore(db.Settings, password ?? throw new UserError("WebDAV 비밀번호를 입력해 연결 잠금을 해제하세요."));
+    private IObjectStore Store()
+    {
+        var settings = db.Settings; var lease = credentials.Acquire(settings);
+        return new WebDavStore(settings, lease.Password, lease.Report);
+    }
     private RevisionRepository Repository(IObjectStore store) => new(store, db.Settings, Path.Combine(db.Root, "staging"));
     public async Task TestConnection()
     {
-        using var store = Store(); var folder = Repository(store).Prefix + "/connection-tests"; await store.EnsureDirectory(folder);
+        await gate.WaitAsync(); try
+        {
+            using var store = Store(); using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await TestConnectionCore(store, timeout.Token); credentials.Verified();
+        }
+        finally { gate.Release(); }
+    }
+    private async Task TestConnectionCore(IObjectStore store, CancellationToken ct)
+    {
+        var folder = Repository(store).Prefix + "/connection-tests"; await store.EnsureDirectory(folder, ct);
         var path = folder + "/" + Guid.NewGuid().ToString("N") + ".txt"; var bytes = System.Text.Encoding.UTF8.GetBytes("RyuSync connection test");
-        await store.Write(path, bytes); try { if (!(await store.Read(path, 1024)).SequenceEqual(bytes)) throw new UserError("연결 테스트의 다운로드 내용이 다릅니다."); } finally { await store.Delete(path); }
+        await store.Write(path, bytes, ct);
+        try
+        {
+            if (!(await store.List(folder, ct)).Contains(Path.GetFileName(path))) throw new UserError("연결 테스트 파일을 목록에서 찾지 못했습니다.");
+            if (!(await store.Read(path, 1024, ct)).SequenceEqual(bytes)) throw new UserError("연결 테스트의 다운로드 내용이 다릅니다.");
+        }
+        finally { await store.Delete(path, ct); }
     }
     public async Task<Revision[]> Catalog()
     {
-        using var store = Store(); var rows = await Repository(store).Catalog(CancellationToken.None);
-        foreach (var row in rows) GameTitles.Remember(db, row.TitleId, row.Title, "server");
-        return rows.Select(row => row with { Title = GameTitles.Resolve(db, row.TitleId, row.Title, "server").Title }).ToArray();
+        await gate.WaitAsync(); try
+        {
+            using var store = Store(); var rows = await Repository(store).Catalog(CancellationToken.None);
+            foreach (var row in rows) GameTitles.Remember(db, row.TitleId, row.Title, "server");
+            return rows.Select(row => row with { Title = GameTitles.Resolve(db, row.TitleId, row.Title, "server").Title }).ToArray();
+        }
+        finally { gate.Release(); }
     }
     private Binding DisplayBinding(Binding binding)
     {
         var name = GameTitles.Resolve(db, binding.TitleId, binding.Title, binding.TitleSource);
-        return binding with { Title = name.Title, TitleSource = name.Source };
+        return binding with { Title = name.Title, TitleSource = name.Source, ThumbnailUrl = name.ThumbnailUrl };
     }
     public Binding[] Bindings() => db.List<Binding>("binding").Select(DisplayBinding).ToArray();
+    public async Task<GameTitle> SaveWebGameInfo(WebGameInfo info)
+    {
+        await gate.WaitAsync(); try
+        {
+            var previous = db.Get<WebGameInfo>("game-web", info.TitleId);
+            db.Put("game-web", info.TitleId, info with { IconBase64 = info.IconBase64 ?? previous?.IconBase64 });
+            GameTitles.Remember(db, info.TitleId, info.Title, "web");
+            return GameTitles.Resolve(db, info.TitleId, info.TitleId);
+        }
+        finally { gate.Release(); }
+    }
     public async Task<GameTitle> SetGameTitle(string titleId, string? title)
     {
         titleId = GameTitles.NormalizeId(titleId);
@@ -148,14 +224,18 @@ public sealed class Coordinator
             }
             // Settings and bindings are restored from one validated SQLite snapshot.
             db.ImportConfiguration(settings, imported.Bindings);
-            password = Environment.GetEnvironmentVariable("RYUSYNC_WEBDAV_PASSWORD");
+            credentials.ChangeConnection(settings, force: true);
             return imported;
         }
         finally { gate.Release(); }
     }
     public async Task<Revision[]> LegacyCatalog()
     {
-        using var store = Store(); return await new RevisionRepository(store, db.Settings with { ProtocolVersion = 1 }, Path.Combine(db.Root, "staging")).Catalog(default);
+        await gate.WaitAsync(); try
+        {
+            using var store = Store(); return await new RevisionRepository(store, db.Settings with { ProtocolVersion = 1 }, Path.Combine(db.Root, "staging")).Catalog(default);
+        }
+        finally { gate.Release(); }
     }
     public async Task<Revision> ImportLegacyRevision(string bindingId, string revisionId)
     {
@@ -211,7 +291,7 @@ public sealed class Coordinator
         return scan with { Saves = scan.Saves.Select(s =>
         {
             var name = GameTitles.Resolve(db, s.TitleId, s.Title, s.TitleSource);
-            return s with { Title = name.Title, TitleSource = name.Source };
+            return s with { Title = name.Title, TitleSource = name.Source, ThumbnailUrl = name.ThumbnailUrl };
         }).ToList() };
     }
     public async Task<LaunchProfile> SaveLaunchProfile(LaunchProfile profile)
