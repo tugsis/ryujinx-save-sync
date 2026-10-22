@@ -84,7 +84,13 @@ public class CredentialTests
         Assert.Equal(secret, restarted.Acquire(d.Db.Settings).Password);
         Assert.DoesNotContain(secret, JsonSerializer.Serialize(restarted.Status()));
         Assert.DoesNotContain(secret, JsonSerializer.Serialize(d.Db.Get<CredentialDocument>("credentials", "local")));
-        foreach (var path in Directory.GetFiles(d.Db.Root, "state.db*")) Assert.DoesNotContain(secret, Encoding.UTF8.GetString(File.ReadAllBytes(path)));
+        foreach (var path in Directory.GetFiles(d.Db.Root, "state.db*"))
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var contents = new MemoryStream();
+            file.CopyTo(contents);
+            Assert.DoesNotContain(secret, Encoding.UTF8.GetString(contents.ToArray()));
+        }
         await restarted.Delete(id); Assert.Empty(store.Secrets); Assert.False(restarted.Status().Ready);
         var deletedRestart = new Credentials(d.Db, store); await deletedRestart.Initialize(); Assert.False(deletedRestart.Status().Saved);
     }
