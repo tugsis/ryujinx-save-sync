@@ -15,6 +15,7 @@ import {
 import "./style.css";
 import { EmulatorSettings } from "./EmulatorSettings";
 import { CredentialSettings } from "./CredentialSettings";
+import { BulkGameMetadata, type GameTitleResult } from "./BulkGameMetadata";
 import { FieldRequirement } from "./FieldRequirement";
 import type { LaunchProfile, RestoreReservation } from "./api";
 const time = (value: string) => new Date(value).toLocaleString("ko-KR");
@@ -202,6 +203,19 @@ function App() {
       fromWeb ? "POST" : reset ? "DELETE" : "PUT",
       fromWeb ? { language: titleLanguage } : reset ? undefined : { title: titleEditor.title },
     );
+    applyGameTitle(result);
+    setTitleEditor(null);
+    setNotice(
+      fromWeb
+        ? `웹 게임 정보를 저장했습니다.${result.thumbnailUrl ? " 썸네일도 받았습니다." : " 제공되는 썸네일이 없습니다."}${result.source === "manual" ? " 직접 지정한 이름은 유지됩니다. 자동 이름으로 되돌리면 웹 이름을 표시합니다." : ""}`
+        : reset
+        ? "게임 이름을 자동 표시로 되돌렸습니다."
+        : "게임 이름을 저장했습니다. 같은 Title ID의 목록에 적용됩니다.",
+    );
+  }
+  function applyGameTitle(result: GameTitleResult) {
+    setBindings(current => current.map(b => b.titleId === result.titleId
+      ? { ...b, title: result.title, titleSource: result.source, thumbnailUrl: result.thumbnailUrl } : b));
     setFound((current) =>
       current.map((s) =>
         s.titleId === result.titleId
@@ -214,14 +228,6 @@ function App() {
         current?.map((r) =>
           r.titleId === result.titleId ? { ...r, title: result.title } : r,
         ) ?? null,
-    );
-    setTitleEditor(null);
-    setNotice(
-      fromWeb
-        ? `웹 게임 정보를 저장했습니다.${result.thumbnailUrl ? " 썸네일도 받았습니다." : " 제공되는 썸네일이 없습니다."}${result.source === "manual" ? " 직접 지정한 이름은 유지됩니다. 자동 이름으로 되돌리면 웹 이름을 표시합니다." : ""}`
-        : reset
-        ? "게임 이름을 자동 표시로 되돌렸습니다."
-        : "게임 이름을 저장했습니다. 같은 Title ID의 목록에 적용됩니다.",
     );
   }
   async function resolve(choice: string) {
@@ -773,6 +779,7 @@ function App() {
           )}
           {page === "games" && (
             <>
+              <BulkGameMetadata games={[...found, ...bindings]} busy={busy} run={action} applied={applyGameTitle} />
               <section className="card">
                 <div className="card-head">
                   <div>
