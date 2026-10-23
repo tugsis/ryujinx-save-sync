@@ -87,7 +87,7 @@ app.MapPut("/api/settings", async (AppSettings settings) => await coordinator.Sa
 app.MapPost("/api/storage/unlock", (CredentialRequest request) => { coordinator.Unlock(request.Password); return Results.Ok(new { unlocked = coordinator.HasCredential }); });
 app.MapGet("/api/storage/credential", () => coordinator.CredentialStatus());
 app.MapPost("/api/storage/credential/probe", async () => await coordinator.ProbeCredentials());
-app.MapPut("/api/storage/credential", async (SaveCredentialRequest request) => await coordinator.ApplyCredential(request.Password, request.Persist, request.ExpectedConnectionId));
+app.MapPut("/api/storage/credential", async (SaveCredentialRequest request) => await coordinator.ApplyCredential(request.Password, request.Persist, request.ExpectedConnectionId, request.Storage));
 app.MapPost("/api/storage/credential/unlock", async (CredentialConnectionRequest request) => await coordinator.UseSavedCredential(request.ExpectedConnectionId));
 app.MapPost("/api/storage/credential/lock", () => coordinator.LockCredential());
 app.MapDelete("/api/storage/credential", async (HttpRequest request) => await coordinator.DeleteCredential(request.Query["connectionId"].ToString()));
@@ -141,7 +141,7 @@ record GameTitleRequest(string Title);
 record WebGameRequest(string Language = "ko");
 record SessionRequest(string Token);
 record CredentialRequest(string? Password);
-record SaveCredentialRequest(string Password, bool Persist, string ExpectedConnectionId);
+record SaveCredentialRequest(string Password, bool Persist, string ExpectedConnectionId, string Storage = "os");
 record CredentialConnectionRequest(string ExpectedConnectionId);
 record RegisterRequest(string DiscoveryId, string Slot, string? InstallationId = null, string? GameVersion = null, string? RestoreReservationId = null);
 record CompatibilityRequest(string State, string ExpectedLocalHash, string[] ExpectedHeads);

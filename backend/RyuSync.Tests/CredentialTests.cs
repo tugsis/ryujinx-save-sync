@@ -37,6 +37,68 @@ public sealed class FakeCredentialStore : ICredentialStore
 }
 public class CredentialTests
 {
+    [Fact]
+    public async Task PlaintextStorageRestartsWithoutOsServiceAndSupportsLockDeletionAndBinding()
+    {
+        using var f = new Fixture(); var d = f.Device("pc"); var store = new FakeCredentialStore { State = "unavailable" };
+        var manager = new Credentials(d.Db, store); var id = manager.Status().ConnectionId;
+        await manager.Initialize();
+        await manager.Apply("file-secret", true, id, "file");
+        var path = Assert.Single(Directory.GetFiles(Path.Combine(d.Db.Root, "credentials-plaintext"), "*.json"));
+        Assert.Contains("file-secret", File.ReadAllText(path));
+        Assert.DoesNotContain("file-secret", JsonSerializer.Serialize(d.Db.Get<CredentialDocument>("credentials", "local")));
+        Assert.DoesNotContain("file-secret", JsonSerializer.Serialize(manager.Status()));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(Path.GetDirectoryName(path)!));
+        }
+        var restarted = new Credentials(d.Db, store); await restarted.Initialize();
+        Assert.Equal("file", restarted.Status().Source); Assert.Equal("file-secret", restarted.Acquire(d.Db.Settings).Password);
+        restarted.Lock(); await restarted.Initialize(); Assert.False(restarted.Status().Ready);
+        await restarted.Unlock(id); Assert.True(restarted.Status().Ready);
+        var original = d.Db.Settings;
+        d.Db.Settings = original with { WebDavUser = "different" }; restarted.ChangeConnection(d.Db.Settings);
+        await restarted.Initialize(); Assert.False(restarted.Status().Ready);
+        Assert.Single(restarted.Retired());
+        d.Db.Settings = original; restarted.ChangeConnection(original); await restarted.Unlock(id);
+        await restarted.Delete(id); Assert.False(File.Exists(path));
+        restarted = new Credentials(d.Db, store); await restarted.Initialize(); Assert.False(restarted.Status().Ready);
+    }
+
+    [Fact]
+    public async Task SwitchingStorageRetiresPreviousSecretAndFailedOsSaveKeepsFile()
+    {
+        using var f = new Fixture(); var d = f.Device("pc"); var store = new FakeCredentialStore();
+        var manager = new Credentials(d.Db, store); var id = manager.Status().ConnectionId;
+        await manager.Apply("os-first", true, id);
+        await manager.Apply("file-next", true, id, "file"); Assert.Empty(store.Secrets);
+        store.FailAfterWrite = true;
+        await Assert.ThrowsAsync<UserError>(() => manager.Apply("failed-os", true, id));
+        var restarted = new Credentials(d.Db, store); await restarted.Initialize();
+        Assert.Equal("file-next", restarted.Acquire(d.Db.Settings).Password);
+        store.FailAfterWrite = false;
+        await restarted.Apply("os-final", true, id);
+        Assert.Empty(Directory.GetFiles(Path.Combine(d.Db.Root, "credentials-plaintext"), "*.json"));
+        restarted = new Credentials(d.Db, store); await restarted.Initialize();
+        Assert.Equal("os-final", restarted.Acquire(d.Db.Settings).Password);
+    }
+
+    [Fact]
+    public async Task CorruptPlaintextFileDoesNotBreakStartupAndCanBeReplaced()
+    {
+        using var f = new Fixture(); var d = f.Device("pc"); var store = new FakeCredentialStore { State = "unavailable" };
+        var manager = new Credentials(d.Db, store); var id = manager.Status().ConnectionId;
+        await manager.Apply("secret", true, id, "file");
+        var path = Assert.Single(Directory.GetFiles(Path.Combine(d.Db.Root, "credentials-plaintext"), "*.json"));
+        File.WriteAllText(path, "broken");
+        var restarted = new Credentials(d.Db, store); await restarted.Initialize();
+        Assert.False(restarted.Status().Ready); Assert.Equal("error", restarted.Status().StoreState);
+        await restarted.Apply("replacement", true, id, "file");
+        Assert.Equal("replacement", restarted.Acquire(d.Db.Settings).Password);
+        Assert.Single(Directory.GetFiles(Path.Combine(d.Db.Root, "credentials-plaintext"), "*.json"));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("invalid\0secret")]

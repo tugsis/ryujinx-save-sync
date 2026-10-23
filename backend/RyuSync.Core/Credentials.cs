@@ -16,6 +16,10 @@ public sealed class Credentials
 {
     private readonly StateDatabase db;
     private readonly ICredentialStore store;
+    private readonly ICredentialStore fileStore;
+    private bool Supported(string provider) => provider == store.Provider || provider == fileStore.Provider;
+    private ICredentialStore StoreFor(CredentialEntry entry) => entry.Provider == fileStore.Provider ? fileStore : store;
+    private string SourceFor(CredentialEntry entry) => entry.Provider == fileStore.Provider ? "file" : "os-store";
     private readonly bool environmentConfigured;
     private string storeState = "unknown";
     private CredentialDocument document;
@@ -27,7 +31,7 @@ public sealed class Credentials
     private Runtime runtime;
     public Credentials(StateDatabase db, ICredentialStore store, string? environmentPassword = null)
     {
-        this.db = db; this.store = store;
+        this.db = db; this.store = store; fileStore = new PlaintextCredentialStore(db.Root);
         document = db.Get<CredentialDocument>("credentials", "local") ?? new(Guid.NewGuid().ToString("N"), []);
         ValidateDocument(document);
         db.Put("credentials", "local", document);
@@ -66,33 +70,33 @@ public sealed class Credentials
         catch (EncoderFallbackException) { throw new UserError(message); }
     }
     private string Key(CredentialEntry entry) => "RyuSync/WebDAV/" + document.Namespace + "/" + entry.Id;
-    private CredentialEntry? Active(string connection) => document.Entries.SingleOrDefault(e => e.ConnectionId == connection && e.Phase == "active" && e.Provider == store.Provider);
+    private CredentialEntry? Active(string connection) => document.Entries.SingleOrDefault(e => e.ConnectionId == connection && e.Phase == "active" && Supported(e.Provider));
     private void Save(CredentialDocument value) { db.Put("credentials", "local", value); document = value; }
     public CredentialStatus Status()
     {
         var current = Volatile.Read(ref runtime); var entries = document.Entries;
-        return new(current.ConnectionId, store.Provider, storeState, Active(current.ConnectionId) is not null,
+        return new(current.ConnectionId, Active(current.ConnectionId)?.Provider ?? store.Provider, storeState, Active(current.ConnectionId) is not null,
             current.Password is not null && !current.Locked, current.Source, current.Verification, current.Locked,
             environmentConfigured, entries.Any(e => e.Phase is "pending" or "deleting"));
     }
     public RetiredCredential[] Retired() => document.Entries
-        .Where(e => e.ConnectionId != runtime.ConnectionId || e.Phase != "active" || e.Provider != store.Provider)
+        .Where(e => e.ConnectionId != runtime.ConnectionId || e.Phase != "active" || !Supported(e.Provider))
         .Select(e => new RetiredCredential(e.Id, e.Description + " · " + e.Provider, e.Phase is "pending" or "deleting")).ToArray();
     public async Task Initialize()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
         {
-            storeState = await store.Probe(timeout.Token);
-            await Cleanup(false, timeout.Token);
+            storeState = await (Active(runtime.ConnectionId) is { } active ? StoreFor(active) : store).Probe(timeout.Token);
             if (runtime.Password is null) await Load(false, timeout.Token);
+            await Cleanup(false, timeout.Token);
         }
         catch (Exception e) when (e is CredentialStoreError or OperationCanceledException) { storeState = State(e); }
     }
     public async Task Probe()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        try { storeState = await store.Probe(timeout.Token); }
+        try { storeState = await (Active(runtime.ConnectionId) is { } active ? StoreFor(active) : store).Probe(timeout.Token); }
         catch (Exception e) when (e is CredentialStoreError or OperationCanceledException) { storeState = State(e); }
     }
     public void ChangeConnection(AppSettings settings, bool force = false)
@@ -131,7 +135,7 @@ public sealed class Credentials
             if (prompt) throw new UserError("현재 연결에 저장된 비밀번호가 없습니다.");
             return;
         }
-        var result = await store.Read(Key(entry), prompt, ct); storeState = result.State;
+        var result = await StoreFor(entry).Read(Key(entry), prompt, ct); storeState = result.State;
         if (result.State == "missing") Save(document with { Entries = document.Entries.Where(e => e.Id != entry.Id).ToArray() });
         if (result.State != "available" || result.Secret is null)
         {
@@ -145,27 +149,29 @@ public sealed class Credentials
             if (prompt) throw StoreFailure();
             return;
         }
-        runtime = new(runtime.ConnectionId, result.Secret, "os-store", "unknown", false);
+        runtime = new(runtime.ConnectionId, result.Secret, SourceFor(entry), "unknown", false);
     }
-    public async Task Apply(string password, bool persist, string expected)
+    public async Task Apply(string password, bool persist, string expected, string storage = "os")
     {
         Expect(expected); ValidatePassword(password);
+        if (storage is not ("os" or "file")) throw new UserError("지원하지 않는 비밀번호 저장 방식입니다.");
+        var targetStore = storage == "file" ? fileStore : store;
         if (!persist) { runtime = new(expected, password, "session", "verified", false); return; }
         var uri = new Uri(db.Settings.WebDavUrl);
         var description = uri.Host + " · " + (db.Settings.WebDavUser.Length > 0 ? db.Settings.WebDavUser[..1] + "***" : "계정 없음");
-        var entry = new CredentialEntry(Guid.NewGuid().ToString("N"), expected, description, "pending", store.Provider);
+        var entry = new CredentialEntry(Guid.NewGuid().ToString("N"), expected, description, "pending", targetStore.Provider);
         Save(document with { Entries = [.. document.Entries, entry] });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         try
         {
-            await store.Write(Key(entry), password, timeout.Token);
-            var read = await store.Read(Key(entry), false, timeout.Token);
+            await targetStore.Write(Key(entry), password, timeout.Token);
+            var read = await targetStore.Read(Key(entry), false, timeout.Token);
             if (read.State != "available" || read.Secret != password) throw new CredentialStoreError(read.State == "available" ? "error" : read.State);
             Expect(expected);
             // One SQLite record switches active references atomically, after OS write/readback.
             Save(document with { Entries = document.Entries.Select(e => e.Id == entry.Id ? e with { Phase = "active" } :
-                e.ConnectionId == expected && e.Phase == "active" && e.Provider == store.Provider ? e with { Phase = "deleting" } : e).ToArray() });
-            runtime = new(expected, password, "os-store", "verified", false); storeState = "available";
+                e.ConnectionId == expected && e.Phase == "active" ? e with { Phase = "deleting" } : e).ToArray() });
+            runtime = new(expected, password, SourceFor(entry), "verified", false); storeState = "available";
         }
         catch (Exception e) when (e is CredentialStoreError or OperationCanceledException)
         {
@@ -180,10 +186,10 @@ public sealed class Credentials
     {
         Expect(expected, allowEmpty: retiredId is not null);
         var entries = retiredId is null
-            ? document.Entries.Where(e => e.ConnectionId == expected && e.Provider == store.Provider).ToArray()
-            : document.Entries.Where(e => e.Id == retiredId && (e.ConnectionId != expected || e.Phase != "active" || e.Provider != store.Provider)).ToArray();
+            ? document.Entries.Where(e => e.ConnectionId == expected && Supported(e.Provider)).ToArray()
+            : document.Entries.Where(e => e.Id == retiredId && (e.ConnectionId != expected || e.Phase != "active" || !Supported(e.Provider))).ToArray();
         if (retiredId is not null && entries.Length == 0) throw new UserError("삭제할 비밀번호 보관 항목이 없습니다.");
-        if (entries.Any(e => e.Provider != store.Provider)) throw new UserError("이 항목은 다른 OS의 보관함에 있습니다. 원래 기기에서 삭제하세요.");
+        if (entries.Any(e => !Supported(e.Provider))) throw new UserError("이 항목은 다른 OS의 보관함에 있습니다. 원래 기기에서 삭제하세요.");
         if (retiredId is null) Lock();
         var ids = entries.Select(e => e.Id).ToHashSet();
         Save(document with { Entries = document.Entries.Select(e => ids.Contains(e.Id) ? e with { Phase = "deleting" } : e).ToArray() });
@@ -196,14 +202,14 @@ public sealed class Credentials
     }
     private async Task DeleteEntry(CredentialEntry entry, bool prompt, CancellationToken ct)
     {
-        await store.Delete(Key(entry), prompt, ct);
-        var check = await store.Read(Key(entry), false, ct);
+        await StoreFor(entry).Delete(Key(entry), prompt, ct);
+        var check = await StoreFor(entry).Read(Key(entry), false, ct);
         if (check.State != "missing") throw new CredentialStoreError(check.State == "available" ? "error" : check.State);
         Save(document with { Entries = document.Entries.Where(e => e.Id != entry.Id).ToArray() });
     }
     private async Task Cleanup(bool prompt, CancellationToken ct)
     {
-        foreach (var entry in document.Entries.Where(e => (e.Phase is "pending" or "deleting") && e.Provider == store.Provider).ToArray())
+        foreach (var entry in document.Entries.Where(e => (e.Phase is "pending" or "deleting") && Supported(e.Provider)).ToArray())
         {
             try { await DeleteEntry(entry, prompt, ct); }
             catch (Exception e) when (e is CredentialStoreError or OperationCanceledException) { break; }
@@ -229,7 +235,8 @@ public sealed class Credentials
     }
     public void Verified() { var current = runtime; Interlocked.CompareExchange(ref runtime, current with { Verification = "verified" }, current); }
     private static string State(Exception e) => e is CredentialStoreError error ? error.State : "cancelled";
-    private UserError StoreFailure() => new(storeState switch
+    private UserError StoreFailure() => new(Active(runtime.ConnectionId)?.Provider == fileStore.Provider
+        ? "비밀번호 파일을 읽거나 변경하지 못했습니다. 상태 폴더의 파일 권한을 확인하고 다시 저장하세요." : storeState switch
     {
         "locked" => "OS 비밀번호 보관함이 잠겨 있습니다. Desktop Mode에서 잠금을 해제하거나 세션 비밀번호를 입력하세요.",
         "missing" => "OS 보관함에서 비밀번호를 찾지 못했습니다. 다시 입력해 저장하세요.",

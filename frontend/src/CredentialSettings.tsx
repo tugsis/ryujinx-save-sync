@@ -20,7 +20,7 @@ const storeLabels: Record<string, string> = {
   error: "보관함 오류", unknown: "확인 전",
 };
 const sourceLabels: Record<string, string> = {
-  none: "입력 필요", session: "이번 실행에서만 사용", environment: "환경변수 사용", "os-store": "기기에 저장된 비밀번호 사용",
+  none: "입력 필요", session: "이번 실행에서만 사용", environment: "환경변수 사용", "os-store": "OS 보관함의 비밀번호 사용", file: "파일에 저장된 비밀번호 사용",
 };
 export function CredentialSettings({ busy, dirty, playing, run, saveSettings, notify }: {
   busy: boolean; dirty: boolean; playing: boolean;
@@ -31,6 +31,7 @@ export function CredentialSettings({ busy, dirty, playing, run, saveSettings, no
   const [retired, setRetired] = useState<Retired[]>([]);
   const [password, setPassword] = useState("");
   const [persist, setPersist] = useState(false);
+  const [storage, setStorage] = useState("os");
   const [loadError, setLoadError] = useState("");
   async function refresh() {
     const [s, rows] = await Promise.all([
@@ -50,7 +51,7 @@ export function CredentialSettings({ busy, dirty, playing, run, saveSettings, no
     return () => { live = false; clearInterval(timer); };
   }, []);
   const disabled = busy || playing || !status;
-  const canSave = !!status && ["available", "missing", "locked", "cancelled"].includes(status.storeState);
+  const canSave = storage === "file" || (!!status && ["available", "missing", "locked", "cancelled"].includes(status.storeState));
   async function action(fn: () => Promise<void>) {
     await run(async () => {
       try { await fn(); }
@@ -62,11 +63,11 @@ export function CredentialSettings({ busy, dirty, playing, run, saveSettings, no
       if (dirty) await saveSettings();
       const current = await refresh();
       const result = await api<CredentialStatus>("/storage/credential", "PUT", {
-        password, persist: saveOnDevice, expectedConnectionId: current.connectionId,
+        password, persist: saveOnDevice, storage, expectedConnectionId: current.connectionId,
       });
       setStatus(result);
       notify(saveOnDevice
-        ? "연결을 확인하고 이 기기의 OS 보관함에 비밀번호를 저장했습니다."
+        ? storage === "file" ? "연결을 확인하고 이 기기의 파일에 비밀번호를 저장했습니다." : "연결을 확인하고 이 기기의 OS 보관함에 비밀번호를 저장했습니다."
         : "연결을 확인했습니다. 비밀번호는 이번 실행에서만 사용합니다.");
     } finally { setPassword(""); }
   }
@@ -87,12 +88,19 @@ export function CredentialSettings({ busy, dirty, playing, run, saveSettings, no
       <input type="password" autoComplete="new-password" value={password} disabled={disabled}
         onChange={(e) => setPassword(e.target.value)} placeholder={status?.saved ? "저장값 유지 · 변경할 때만 입력" : "WebDAV 비밀번호 또는 앱 비밀번호"} />
     </label>
+    <label className="field"><span>기기에 저장하는 방식</span>
+      <select value={storage} disabled={disabled} onChange={e => setStorage(e.target.value)}>
+        <option value="os">OS 비밀번호 보관함</option>
+        <option value="file">파일에 평문 저장 (개인 기기용)</option>
+      </select>
+    </label>
+    {storage === "file" && <p className="hint">비밀번호를 암호화하지 않은 파일로 저장합니다. 파일을 읽을 수 있는 사람은 비밀번호를 볼 수 있습니다. 별도 보관함 없이 재시작·서비스 실행 시 자동으로 불러옵니다.</p>}
     <label className="checkbox">
       <input type="checkbox" checked={persist} disabled={disabled || (!canSave && !persist)} onChange={(e) => setPersist(e.target.checked)} />
-      이 기기에 안전하게 저장 <small>선택</small>
+      {storage === "file" ? "이 기기의 파일에 평문 저장" : "이 기기에 안전하게 저장"} <small>선택</small>
     </label>
-    <p className="hint">{status?.provider} · {storeLabels[status?.storeState ?? "unknown"]}.
-      {!canSave && " 보관함을 사용할 수 없으면 세션 입력을 사용하세요. Linux에서는 libsecret과 사용자 Secret Service가 필요합니다."}
+    <p className="hint">현재 저장소: {status?.provider} · {storeLabels[status?.storeState ?? "unknown"]}.
+      {!canSave && " 보관함을 사용할 수 없으면 세션 입력을 사용하세요. 파일 저장 방식을 선택할 수도 있습니다. OS 보관함은 Linux에서 libsecret과 사용자 Secret Service가 필요합니다."}
       {status?.storeState === "locked" && " Desktop Mode에서 OS 보관함 잠금을 해제해야 할 수 있습니다."}
     </p>
     <div className="row-actions credential-actions">
@@ -133,6 +141,6 @@ export function CredentialSettings({ busy, dirty, playing, run, saveSettings, no
     </>}
     {dirty && <p className="hint">저장된 비밀번호 사용·삭제 전에 변경한 서버 설정을 저장하세요.</p>}
     {playing && <p className="hint">게임 실행 세션이 끝나면 비밀번호를 변경할 수 있습니다.</p>}
-    {busy && <p role="status">처리 중입니다. OS 보관함에서 잠금 해제 창을 표시할 수 있습니다.</p>}
+    {busy && <p role="status">처리 중입니다.</p>}
   </div>;
 }

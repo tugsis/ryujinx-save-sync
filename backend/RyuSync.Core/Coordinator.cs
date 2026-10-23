@@ -38,7 +38,7 @@ public sealed class Coordinator
     {
         EnterCredentialChange(); try { credentials.UseSession(value); } finally { gate.Release(); }
     }
-    public async Task<CredentialStatus> ApplyCredential(string password, bool persist, string expectedConnectionId)
+    public async Task<CredentialStatus> ApplyCredential(string password, bool persist, string expectedConnectionId, string storage = "os")
     {
         EnterCredentialChange(); try
         {
@@ -46,7 +46,7 @@ public sealed class Coordinator
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             using var candidate = new WebDavStore(db.Settings, password);
             await TestConnectionCore(candidate, timeout.Token);
-            await credentials.Apply(password, persist, expectedConnectionId);
+            await credentials.Apply(password, persist, expectedConnectionId, storage);
             return credentials.Status();
         }
         finally { gate.Release(); }
