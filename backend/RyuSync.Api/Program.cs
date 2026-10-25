@@ -15,13 +15,13 @@ var root = Option(args, "--data-dir") ?? Environment.GetEnvironmentVariable("RYU
     Path.Combine(Environment.GetEnvironmentVariable("XDG_STATE_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "state"), "ryusync-v2"));
 root = Path.GetFullPath(root);
 var command = args.FirstOrDefault() ?? "serve";
-if (command is "launch" or "open")
+if (command is "launch" or "open" or "deck")
 {
     return await LauncherClient.Run(command, root, args);
 }
 if (command is not "serve" and not "--data-dir" and not "--port")
 {
-    Console.Error.WriteLine("사용법: ryusync [serve|open|launch] [--data-dir PATH] [--port 17843]"); return 2;
+    Console.Error.WriteLine("사용법: ryusync [serve|open|deck|launch] [--data-dir PATH] [--port 17843]"); return 2;
 }
 var port = int.TryParse(Option(args, "--port"), out var customPort) ? customPort : 17843;
 if (port is < 1024 or > 65535) throw new UserError("포트는 1024~65535여야 합니다.");
@@ -157,7 +157,7 @@ static class LauncherClient
     private static string? OptionValue(string[] args, string name)
     {
         var index = Array.IndexOf(args, name);
-        if (index >= 0 && (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))) throw new UserError("실행 프로필 ID를 지정하세요.");
+        if (index >= 0 && (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))) throw new UserError(name + " 값을 지정하세요.");
         return index >= 0 ? args[index + 1] : null;
     }
     private static void OpenBrowser(string url)
@@ -168,6 +168,9 @@ static class LauncherClient
     {
         try
         {
+            var deck = command == "deck" || args.Contains("--deck");
+            var browser = deck ? DeckBrowser.Find(OptionValue(args, "--browser")) : null;
+            if (deck && browser is null) throw new UserError("Deck 창에는 Chromium 또는 Chrome이 필요합니다. SteamOS Desktop Mode의 Discover에서 Chromium을 설치하세요. 일반 브라우저는 ryusync open으로 열 수 있습니다.");
             InstanceInfo? info = null;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             async Task<bool> Connect()
@@ -193,11 +196,17 @@ static class LauncherClient
                 if (info is null) throw new UserError("로컬 백엔드가 시작되지 않았습니다. serve 명령으로 오류를 확인하세요.");
             }
             client.DefaultRequestHeaders.Add("X-RyuSync-Agent", info!.Token);
-            var ticket = await client.PostAsJsonAsync(info.Url + "/api/ui-ticket", new { }); ticket.EnsureSuccessStatusCode();
-            var ui = await ticket.Content.ReadFromJsonAsync<JsonElement>(); var browserUrl = ui.GetProperty("url").GetString()!;
-            if (command == "open") { OpenBrowser(browserUrl); return 0; }
+            async Task ShowUi()
+            {
+                // Request at the moment the UI is opened, including after a long game session.
+                var ticket = await client.PostAsJsonAsync(info.Url + "/api/ui-ticket", new { }); ticket.EnsureSuccessStatusCode();
+                var ui = await ticket.Content.ReadFromJsonAsync<JsonElement>(); var browserUrl = ui.GetProperty("url").GetString()!;
+                if (deck) await DeckBrowser.Open(browserUrl.Replace("/#", "/?ui=deck#", StringComparison.Ordinal), browser!);
+                else OpenBrowser(browserUrl);
+            }
+            if (command is "open" or "deck") { await ShowUi(); return 0; }
             using var launched = await client.PostAsJsonAsync(info.Url + "/api/launch-sessions", new { launchProfileId = OptionValue(args, "--launch-profile") });
-            if (!launched.IsSuccessStatusCode) { Console.Error.WriteLine(await launched.Content.ReadAsStringAsync()); OpenBrowser(browserUrl); return 1; }
+            if (!launched.IsSuccessStatusCode) { Console.Error.WriteLine(await launched.Content.ReadAsStringAsync()); await ShowUi(); return 1; }
             var session = await launched.Content.ReadFromJsonAsync<LaunchSession>(JsonDefaults.Options) ?? throw new UserError("실행 세션 응답이 없습니다.");
             Console.WriteLine("실행 전 동기화 중…"); string previous = "";
             while (true)
@@ -205,7 +214,7 @@ static class LauncherClient
                 session = await client.GetFromJsonAsync<LaunchSession>(info.Url + "/api/launch-sessions/" + session.Id, JsonDefaults.Options) ?? throw new UserError("실행 세션을 찾지 못했습니다.");
                 if (session.Status != previous) { Console.WriteLine(session.Message); previous = session.Status; }
                 if (session.Status == "completed") return 0;
-                if (session.Status is "blocked" or "failed" or "needs-attention") { OpenBrowser(browserUrl); return 1; }
+                if (session.Status is "blocked" or "failed" or "needs-attention") { await ShowUi(); return 1; }
                 await Task.Delay(500);
             }
         }

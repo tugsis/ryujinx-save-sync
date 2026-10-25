@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import {
   api,
@@ -13,6 +13,8 @@ import {
   type Session,
 } from "./api";
 import "./style.css";
+import { DeckView } from "./DeckView";
+import { useDeckNavigation } from "./useDeckNavigation";
 import { EmulatorSettings } from "./EmulatorSettings";
 import { CredentialSettings } from "./CredentialSettings";
 import { BulkGameMetadata, type GameTitleResult } from "./BulkGameMetadata";
@@ -45,6 +47,17 @@ const labels: Record<string, string> = {
   "needs-attention": "확인 필요",
 };
 function App() {
+  const [deck, setDeck] = useState(() => {
+    const query = new URLSearchParams(location.search).get("ui");
+    if (query) return query === "deck";
+    try { return localStorage.getItem("ryusync-ui") === "deck"; } catch { return false; }
+  });
+  useEffect(() => {
+    document.documentElement.dataset.ui = deck ? "deck" : "desktop";
+    try { localStorage.setItem("ryusync-ui", deck ? "deck" : "desktop"); } catch { /* Private browser storage may be disabled. */ }
+  }, [deck]);
+
+  const [connected, setConnected] = useState(false);
   const [ready, setReady] = useState(false),
     [authError, setAuthError] = useState(""),
     [page, setPage] = useState("settings");
@@ -83,6 +96,10 @@ function App() {
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
     [conflict, setConflict] = useState<Outcome | null>(null);
+  const [conflictChoice, setConflictChoice] = useState<string | null>(null);
+  useEffect(() => setConflictChoice(null), [conflict]);
+  const closeModal = useCallback(() => { if (!busy) { setConflict(null); setTitleEditor(null); } }, [busy]);
+  useDeckNavigation(deck, !!conflict || !!titleEditor, closeModal);
   async function refresh() {
     const [s, b, j, ba, se, pr, re] = await Promise.all([
       api<Status>("/status"),
@@ -93,6 +110,7 @@ function App() {
       api<LaunchProfile[]>("/launch-profiles"),
       api<RestoreReservation[]>("/restore-reservations"),
     ]);
+    setConnected(true);
     setStatus(s);
     setBindings(b);
     setJobs(j);
@@ -130,7 +148,7 @@ function App() {
     if (!ready) return;
     let live = true;
     const timer = setInterval(() => {
-      if (live) refresh().catch((e) => setNotice((e as Error).message));
+      if (live) refresh().catch((e) => { setConnected(false); setNotice("백엔드 연결을 확인하세요. 재시작했다면 창을 닫고 Steam 바로가기를 다시 실행해 새 인증 링크를 받으세요. " + (e as Error).message); });
     }, 2000);
     return () => {
       live = false;
@@ -267,10 +285,126 @@ function App() {
     const b = bindings.find((b) => b.id === id);
     return b ? `${b.title} · ${b.emulatorKind} · ${b.slot}` : id;
   };
+  const conflictUi = conflict && (
+        <div className="modal-backdrop">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="conflict-title"
+            className="modal"
+          >
+            <h2 id="conflict-title">
+              {conflict.status === "compatibility-required"
+                ? "교차 에뮬레이터 세이브 확인"
+                : "진행 상황이 두 갈래로 나뉘었어요"}
+            </h2>
+            <p>{name(conflict.bindingId)}</p>
+            {conflict.status === "compatibility-required" && (
+              <>
+                <p>{conflict.message}</p>
+                <div className="warning">
+                  같은 Title ID여도 게임 버전·모드·계정에 따라 호환되지 않을 수
+                  있습니다. 시험 적용 승인 후 다시 동기화하고, 에뮬레이터를 수동
+                  실행해 실제 로드·저장·종료를 확인하세요. 확인 전 Steam 자동
+                  실행은 차단됩니다.
+                </div>
+                {conflict.versions?.map((v) => (
+                  <p key={v.id}>
+                    {v.deviceName} · {v.sourceEmulator} {v.sourceBuild} · 게임{" "}
+                    {v.gameVersion || "버전 미확인"}
+                  </p>
+                ))}
+                {(
+                  [
+                    ["trial", "백업 후 시험 적용 승인"],
+                    ["confirmed", "게임에서 로드·저장·종료 확인 완료"],
+                  ] as const
+                ).map(([state, label]) => (
+                  <button
+                    className="version-button"
+                    key={state}
+                    disabled={busy}
+                    onClick={() =>
+                      action(async () => {
+                        await api(
+                          "/save-sets/" + conflict.bindingId + "/compatibility",
+                          "POST",
+                          {
+                            state,
+                            expectedLocalHash: conflict.localHash,
+                            expectedHeads: conflict.heads,
+                          },
+                        );
+                        setConflict(null);
+                        setNotice(
+                          state === "trial"
+                            ? "시험 적용을 승인했습니다. 다시 동기화하여 사용할 원본을 선택하세요."
+                            : "교차 호환성 확인을 기록했습니다.",
+                        );
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </>
+            )}
+            {conflict.status !== "compatibility-required" && (
+              <>
+                <div className="warning">
+                  선택하지 않은 로컬 내용도 서버 버전과 백업으로 보존합니다.
+                  상태가 바뀌면 다시 비교합니다.
+                </div>
+                <button
+                  disabled={busy}
+                  className="version-button"
+                  onClick={() => setConflictChoice("local")}
+                >
+                  <strong>이 기기의 세이브 사용</strong>
+                  <small>현재 로컬 진행 상황으로 통일</small>
+                </button>
+                {conflict.versions?.map((v) => (
+                  <button
+                    key={v.id}
+                    disabled={busy}
+                    className="version-button"
+                    onClick={() => setConflictChoice(v.id)}
+                  >
+                    <strong>{v.deviceName}의 세이브 사용</strong>
+                    <small>
+                      {time(v.createdAt)} · {v.sourceEmulator} {v.sourceBuild} ·{" "}
+                      {v.id.slice(0, 8)}
+                    </small>
+                  </button>
+                ))}
+              </>
+            )}
+            {conflict.status !== "compatibility-required" && <>
+              <p role="status">{conflictChoice ? (conflictChoice === "local" ? "이 기기의 세이브" : "선택한 서버 세이브") + "를 적용합니다. 내용이 변경되었으면 다시 비교합니다." : "사용할 버전을 선택한 뒤 적용하세요. 기록 시각이 늦다고 진행도가 더 높은 것은 아닙니다."}</p>
+              <button disabled={busy || !conflictChoice} onClick={() => conflictChoice && action(() => resolve(conflictChoice))}>선택한 버전 적용</button>
+            </>}
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => setConflict(null)}
+            >
+              나중에 선택
+            </button>
+          </section>
+        </div>
+      );
   const installations = [
     { id: "legacy", name: "기본 Ryujinx", kind: "ryujinx" },
     ...(settings?.installations ?? []),
   ];
+  function detailed(target: string) { setDeck(false); setPage(target); }
+  if (deck && settings) return <div className="deck-root"><DeckView
+    settings={settings} status={status} bindings={bindings} jobs={jobs} profiles={profiles}
+    busy={busy || !connected} dirty={dirty} notice={notice} change={(key, value) => {
+      change(key, value);
+      if (key === "arguments") setArgsText((value as string[]).join("\n"));
+    }} save={save} run={action} sync={sync} scan={async (id, saveFirst) => { await scan(id, saveFirst); detailed("games"); }}
+    notify={setNotice} resolve={setConflict} detailed={detailed} />{conflictUi}</div>;
   return (
     <div className="app">
       <aside className="sidebar">
@@ -327,7 +461,7 @@ function App() {
               }[page]
             }
           </span>
-          <span className="badge green">내 기기에서 관리</span>
+          <div className="row-actions"><span className="badge green">내 기기에서 관리</span><button className="secondary" onClick={() => setDeck(true)}>Deck 화면</button></div>
         </header>
         <main>
           <div className="page-title">
@@ -602,9 +736,7 @@ function App() {
                       </small>
                     </Field>
                     <p className="hint">
-                      현재 개발판은 실패 시 브라우저에서 해결합니다. Gaming Mode
-                      전용 컨트롤러 창과 오프라인 실행 선택은 아직 구현
-                      전입니다.
+                      설정·동기화 전용 창은 deck, 게임 문제 발생 시 Deck 창을 열려면 launch --deck을 사용하세요. 오프라인 강제 실행은 지원하지 않습니다.
                     </p>
                   </div>
                 </section>
@@ -1242,110 +1374,7 @@ function App() {
           </section>
         </div>
       )}
-      {conflict && (
-        <div className="modal-backdrop">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="conflict-title"
-            className="modal"
-          >
-            <h2 id="conflict-title">
-              {conflict.status === "compatibility-required"
-                ? "교차 에뮬레이터 세이브 확인"
-                : "진행 상황이 두 갈래로 나뉘었어요"}
-            </h2>
-            <p>{name(conflict.bindingId)}</p>
-            {conflict.status === "compatibility-required" && (
-              <>
-                <p>{conflict.message}</p>
-                <div className="warning">
-                  같은 Title ID여도 게임 버전·모드·계정에 따라 호환되지 않을 수
-                  있습니다. 시험 적용 승인 후 다시 동기화하고, 에뮬레이터를 수동
-                  실행해 실제 로드·저장·종료를 확인하세요. 확인 전 Steam 자동
-                  실행은 차단됩니다.
-                </div>
-                {conflict.versions?.map((v) => (
-                  <p key={v.id}>
-                    {v.deviceName} · {v.sourceEmulator} {v.sourceBuild} · 게임{" "}
-                    {v.gameVersion || "버전 미확인"}
-                  </p>
-                ))}
-                {(
-                  [
-                    ["trial", "백업 후 시험 적용 승인"],
-                    ["confirmed", "게임에서 로드·저장·종료 확인 완료"],
-                  ] as const
-                ).map(([state, label]) => (
-                  <button
-                    className="version-button"
-                    key={state}
-                    disabled={busy}
-                    onClick={() =>
-                      action(async () => {
-                        await api(
-                          "/save-sets/" + conflict.bindingId + "/compatibility",
-                          "POST",
-                          {
-                            state,
-                            expectedLocalHash: conflict.localHash,
-                            expectedHeads: conflict.heads,
-                          },
-                        );
-                        setConflict(null);
-                        setNotice(
-                          state === "trial"
-                            ? "시험 적용을 승인했습니다. 다시 동기화하여 사용할 원본을 선택하세요."
-                            : "교차 호환성 확인을 기록했습니다.",
-                        );
-                      })
-                    }
-                  >
-                    {label}
-                  </button>
-                ))}
-              </>
-            )}
-            {conflict.status !== "compatibility-required" && (
-              <>
-                <div className="warning">
-                  선택하지 않은 로컬 내용도 서버 버전과 백업으로 보존합니다.
-                  상태가 바뀌면 다시 비교합니다.
-                </div>
-                <button
-                  disabled={busy}
-                  className="version-button"
-                  onClick={() => action(() => resolve("local"))}
-                >
-                  <strong>이 기기의 세이브 사용</strong>
-                  <small>현재 로컬 진행 상황으로 통일</small>
-                </button>
-                {conflict.versions?.map((v) => (
-                  <button
-                    key={v.id}
-                    disabled={busy}
-                    className="version-button"
-                    onClick={() => action(() => resolve(v.id))}
-                  >
-                    <strong>{v.deviceName}의 세이브 사용</strong>
-                    <small>
-                      {time(v.createdAt)} · {v.sourceEmulator} {v.sourceBuild} ·{" "}
-                      {v.id.slice(0, 8)}
-                    </small>
-                  </button>
-                ))}
-              </>
-            )}
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() => setConflict(null)}
-            >
-              나중에 선택
-            </button>
-          </section>
-        </div>
-      )}
+      {conflictUi}
     </div>
   );
 }

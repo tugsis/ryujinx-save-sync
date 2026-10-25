@@ -306,7 +306,7 @@ Desktop Mode의 Steam에서 비 Steam 게임으로 추가한 뒤 확인합니다
 | 실행 옵션 | `launch` |
 | 호환성 | Linux 네이티브 빌드이므로 Proton 강제 사용을 해제하고 실행 |
 
-`/home/deck`은 실제 사용자 홈 경로에 맞춰 바꾸세요. 설정 후 Gaming Mode 라이브러리의 비 Steam 항목에서 실행합니다. 현재 Gaming Mode 전용 컨트롤러 창이 없으므로 충돌·인증 문제는 Desktop Mode 브라우저에서 해결해야 할 수 있습니다. 세션 전용 비밀번호는 백엔드 종료 시 사라집니다. OS 보관함에 저장했다면 모드 전환 후 읽을 수 있는지 확인하고, 잠겨 있다면 Desktop Mode에서 해제하세요.
+`/home/deck`은 실제 사용자 홈 경로에 맞춰 바꾸세요. 설정 후 Gaming Mode 라이브러리의 비 Steam 항목에서 실행합니다. Deck 창을 쓰려면 게임 실행 옵션에 `--deck`을 추가하세요. 자세한 창 실행·브라우저 요구사항은 아래 ‘Steam Deck 화면을 비Steam 게임으로 열기’를 참고하세요. 세션 전용 비밀번호는 백엔드 종료 시 사라집니다. OS 보관함에 저장했다면 모드 전환 후 읽을 수 있는지 확인하고, 잠겨 있다면 Desktop Mode에서 해제하세요.
 
 ### 실행 중·종료 후의 동작
 
@@ -476,3 +476,27 @@ PLAN.md                   최종 목표 기획
 일괄 조회 브라우저 검증은 프론트엔드와 API 빌드 후 Linux에서 `python3 tests/bulk_metadata_ui.py`로 실행할 수 있습니다. Google Chrome이 필요하며 임시 데이터와 모의 응답을 사용하므로 외부 게임 정보 서버를 조회하지 않습니다.
 
 버튼을 눌렀을 때만 [Nlib API](https://github.com/ghost-land/Nlib-API)를 조회합니다. 받은 이름·이미지는 기기에 저장되어 오프라인에서도 표시되고, 직접 지정한 이름은 유지됩니다. 자세한 동작과 데이터 전송 범위는 [게임 메타데이터 사용법](docs/yuzu.md#웹에서-이름썸네일-받기-ryujinxyuzu-공통)을 참고하세요.
+
+## Steam Deck 화면을 비Steam 게임으로 열기
+
+기존 Windows/PC 화면은 그대로 사용하며 상단 **Deck 화면**으로 큰 화면 구성으로 전환할 수 있습니다. Deck 화면의 **기존 화면**에서 상세 게임 관리·서버 목록·이력·백업으로 돌아갑니다. 서버 주소·포트·설정 데이터는 같습니다.
+
+설정·동기화 전용 Steam 바로가기는 다음처럼 등록하세요. 경로는 실제 배포 폴더로 바꾸고 SteamOS에서는 Proton 강제 사용을 해제하세요.
+
+| Steam 속성 | 값 |
+|---|---|
+| 대상 | `"/home/deck/Applications/RyuSync/ryusync"` |
+| 시작 위치 | `"/home/deck/Applications/RyuSync"` |
+| 실행 옵션 | `deck` |
+
+처음에는 Desktop Mode에서 Discover로 **Chromium** 또는 **Google Chrome**을 설치하고 `./ryusync deck` 실행을 확인하세요. 기존 네이티브 Chromium/Chrome 또는 Flatpak 설치본을 자동 탐색합니다. Windows에서는 Chrome/Edge를 사용할 수 있습니다. 브라우저가 없으면 오류 안내 후 종료하며 자동 설치하지 않습니다. 특수 설치는 `deck --browser "/실제/Chromium/실행파일"`로 지정할 수 있습니다.
+
+`deck`은 매번 새 인증 링크를 받아 주소 표시줄 없는 브라우저 앱 창을 열고 **창을 닫을 때까지 실행 상태를 유지**합니다. 토큰 포함 URL을 Steam에 저장하지 마세요. 기존 기본 브라우저 프로필과 분리된 임시 프로필을 사용하며 일반 종료 시 정리를 시도합니다. 강제 종료하면 임시 프로필이 남을 수 있습니다. 화면은 터치·트랙패드와 키보드로 조작합니다. 컨트롤러는 Steam Input에서 방향키/Enter/Esc로 매핑하세요. 텍스트 입력에는 Steam 화면 키보드를 사용합니다.
+
+게임 실행용 바로가기는 `launch --deck` 또는 `launch --deck --launch-profile 프로필ID`를 사용하세요. 게임 시작 전·후 동기화는 기존 방식이며, 인증·충돌 문제 발생 시 새 토큰으로 Deck 창을 엽니다. 문제 해결 후 창을 닫고 Steam 바로가기를 다시 실행합니다. 창을 닫는 것만으로 게임을 자동 실행하지 않습니다.
+
+백엔드가 사용자 서비스로 실행 중이면 같은 사용자·상태 폴더의 백엔드에 연결합니다. `--data-dir`을 사용했다면 Steam 실행 옵션에도 같은 절대 경로를 넣으세요. 일반 창 닫기는 백엔드를 종료하지 않지만 Steam 강제 중지는 자동 시작된 자식 백엔드까지 중지할 수 있으므로 상시 실행은 사용자 서비스를 사용하세요. 백엔드 재시작으로 인증이 만료되면 창을 닫고 바로가기를 다시 실행합니다.
+
+실제 SteamOS Gaming Mode의 창 포커스·모드 전환·절전 복귀·Steam 강제 중지, Flatpak 브라우저 및 Windows 앱 창은 별도 실기기 확인이 필요합니다. 구현과 검증 범위는 [Deck UI 기획](docs/ui-steamos/PLAN.md)을 참고하세요.
+
+개발 검증: 프론트엔드/API 빌드 후 `python3 tests/deck_launcher_integration.py`, Google Chrome이 있는 Linux에서 `python3 tests/deck_ui.py`를 실행합니다. Chrome과 Xvfb가 있는 Linux에서는 `python3 tests/deck_window_smoke.py`로 실제 앱 창의 열기·닫기·런처 대기를 검증할 수 있습니다.
